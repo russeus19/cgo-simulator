@@ -7561,8 +7561,9 @@ function PerfilUnidad({ g, id, close, volverA, volver, verTaller, gestionar }) {
   const dv = desgasteDe(g, id);
   const u = { ...base, desgaste: dv, fiab: fiabDesgaste(dv) };
   const pareja = tren ? tren.unidades.filter((x) => x.id !== id) : lote ? lote.unidades.filter((x) => x.id !== id) : [];
-  const marchas = tren ? rotacionDelDia(tren) : [];
-  const actual = marchas.find((x) => g.reloj >= x.ini && g.reloj < x.fin);
+  // las marchas reales del tren que lleva esta unidad, no las teóricas
+  const marchas = tren ? tren.marchas || [] : [];
+  const enCursoU = tren ? marchaActual(tren) : null;
 
   const situacionTxt = tren
     ? `En servicio · circulación ${tren.i}`
@@ -7660,7 +7661,7 @@ function PerfilUnidad({ g, id, close, volverA, volver, verTaller, gestionar }) {
         <Bloque titulo="Trenes que hace hoy">
           {marchas.length === 0 && <div style={{ fontSize: 12.5, color: P.muted, padding: "6px 0" }}>Sin servicio asignado en este turno.</div>}
           {marchas.map((x, k) => {
-            const enCurso = enCursoM === x;
+            const enCurso = enCursoU === x;
             const pasada = x.real;
             // una vez terminada manda lo que pasó de verdad
             const desde = x.desde;
