@@ -9,6 +9,7 @@ const ROJO = "#D7282F";
 const P = {
   ground: "#E9EBEA",
   surface: "#FFFFFF",
+  blanco: "#FFFFFF", // texto sobre fondos de color
   ink: "#11161A",
   muted: "#6B7780",
   rule: "#D5DAD9",
@@ -19,6 +20,53 @@ const P = {
 };
 
 /* ── infraestructura ────────────────────────────────────────── */
+
+/* Escala tipográfica. Había veintiséis tamaños distintos, con 11, 11,5, 12 y
+   12,5 conviviendo: medio píxel no se percibe, pero obliga a decidir cada vez
+   y descuadra alineaciones. Nueve pasos con nombre, cada uno con su papel. */
+/* Radios de esquina: había trece valores distintos, de 1 a 20 px. Cinco
+   bastan y hacen que todo encaje entre sí.                              */
+const R = { hilo: 2, menudo: 4, normal: 8, grande: 14, pastilla: 20 };
+
+/* Elevación. Todo estaba al mismo nivel visual y no se entendía qué descansa
+   sobre qué: la tarjeta, el desplegable y la hoja de perfil se veían igual.
+   Cuatro niveles, del contenido a lo que flota sobre todo lo demás.     */
+const SOMBRA = {
+  card: "0 1px 2px rgba(10,14,17,.05)", // apoyada en el fondo
+  elevado: "0 4px 12px rgba(10,14,17,.10)", // desplegables y avisos
+  hoja: "0 -6px 24px rgba(10,14,17,.16)", // hojas inferiores
+  barra: "0 -2px 10px rgba(10,14,17,.10)", // barra de mando
+};
+
+const T = {
+  micro: 9,      // rótulos en versalita
+  menor: 10,     // apostillas y pies
+  aux: 11.5,     // datos secundarios
+  base: 13,      // texto corriente
+  alto: 15,      // botones y datos destacados
+  titulo: 19,    // títulos de hoja
+  cabecera: 27,  // cifras grandes y encabezados
+  cartel: 44,    // portada
+  cartelXL: 56,  // portada
+};
+
+/* Las dos familias van declaradas en un solo sitio. La monoespaciada era
+   ui-monospace, que toma la del sistema: SF Mono en Apple, Consolas en
+   Windows, Roboto Mono en Android. Cada una tiene anchos y métricas
+   distintas, así que el mismo dato ocupaba un espacio diferente en cada
+   dispositivo y podía descuadrar lo que tanto ha costado alinear.
+
+   Roboto Mono es neutra y de trazo limpio: acompaña a Archivo sin competir
+   con ella y se lee bien en cuerpos pequeños, que es donde van las horas y
+   los números de tren.                                                  */
+const FUENTE = "'Archivo', system-ui, sans-serif";
+/* Para los datos se usa la misma Archivo con cifras tabulares en vez de una
+   monoespaciada. Así el cero queda limpio —casi todas las monoespaciadas lo
+   marcan con barra o punto para distinguirlo de la O— y el juego mantiene una
+   sola voz tipográfica. Las cifras tabulares dan a todos los dígitos el mismo
+   ancho, que era lo único que se necesitaba de una monoespaciada: que las
+   horas y los números no bailen al cambiar.                             */
+const MONO = "'Archivo', system-ui, sans-serif";
 
 const LIN = { "C-7": "#D7282F", "C-1": "#5BB3E4", "C-9": "#0E7A50", "C-2": "#00A24B", "C-3": "#7B2E8E", "C-4": "#004B93", "C-5": "#F2A104", "C-8": "#8A8F94", "C-10": "#00A192" };
 const METRO = "#0065B3";
@@ -75,12 +123,22 @@ const ESTACIONES = [
   { n: "Alcalá de Henares", corto: "Alcalá", t: 100, esc: 5, rotVias: ["vía 1", "vía 2", "vía 4", "vía 6"], apartVias: ["vía 2", "vía 4", "vía 6"], term: true, cab: "Alcalá de Henares", tipo: "est", c: ["C-2", "C-8"] },
 ];
 
-const BANDAS = {
-  0: { n: "Las Rozas – Príncipe Pío", d: "con C-10" },
-  6: { n: "Chamartín – Pitis", d: "con C-8" },
-  10: { n: "Túnel de la Risa", d: "con C-2, C-8 y C-10" },
-  13: { n: "Corredor del Henares", d: "con C-2 y C-8" },
-};
+/* Tramos que la C-7 comparte con otras líneas. Se indexan por nombre de
+   estación y no por número: al añadir los puestos de circulación todas las
+   bandas se desplazaron y quedaron señalando el tramo equivocado.       */
+/* Cada banda se dibuja justo encima de la estación indicada, de modo que
+   queda entre esa y la anterior. Túnel de la Risa va entre Chamartín y
+   Nuevos Ministerios, y el Corredor del Henares entre Atocha y Entrevías. */
+const BANDAS_DEF = [
+  { antesDe: "Príncipe Pío", n: "Las Rozas – Príncipe Pío", d: "con C-10" },
+  { antesDe: "Pitis", n: "El Pardo – Pitis", d: "con C-8" },
+  { antesDe: "Nuevos Ministerios", n: "Túnel de la Risa", d: "con C-2, C-8 y C-10" },
+  { antesDe: "Asamblea de Madrid – Entrevías", n: "Corredor del Henares", d: "con C-2 y C-8" },
+];
+
+const BANDAS = Object.fromEntries(
+  BANDAS_DEF.map((b) => [ESTACIONES.findIndex((e) => e.n === b.antesDe), { n: b.n, d: b.d }]).filter(([k]) => k >= 0)
+);
 
 const N = ESTACIONES.length;
 
@@ -487,39 +545,92 @@ function numDeMarcha(inicio, haciaPio, esVacio = false) {
    forma de lo que ha pasado.                                            */
 
 // la marcha que el tren está haciendo ahora mismo
-const marchaActual = (t) => (t.marchas || []).find((m) => !m.real);
+/* Marcha que el tren está haciendo ahora. Se busca por la hora, no por el
+   orden: antes devolvía la primera sin cerrar y, como solo se cerraban al
+   pasar por una cabecera, el cuadro se quedaba clavado en la segunda aunque
+   fueran las nueve de la mañana.                                        */
+/* ── rotación del día ───────────────────────────────────────────
+   Cada circulación lleva el cuadro completo de lo que va a hacer, y cada
+   marcha va pasando por tres estados:
+
+     prevista → curso → hecha
+
+   Mientras es prevista se enseña lo planificado. Al empezar se anota la hora
+   real de salida y al acabar la hora y la estación reales. Una marcha nunca
+   se cierra antes de haber empezado: ese era el origen de recorridos como
+   "Alcalá → Alcalá, 07:20 – 07:04", que cerraban una marcha futura con la
+   hora actual.                                                          */
+
+// la que el tren está haciendo ahora mismo, o null si no ha empezado ninguna
+function marchaEnCurso(t) {
+  return (t.marchas || []).find((m) => m.estado === "curso") || null;
+}
+
+// pone en marcha la que corresponda a esta hora
+function arrancarMarcha(t, r) {
+  const m = (t.marchas || []).find((x) => x.estado === "prevista" && x.ini <= r && r < x.fin);
+  if (!m) return null;
+  m.estado = "curso";
+  m.iniReal = Math.round(r);
+  return m;
+}
 
 function cerrarMarcha(g, t, idx, motivo = null) {
-  const m = marchaActual(t);
+  const m = marchaEnCurso(t);
   if (!m) return;
   const k = Math.max(0, Math.min(N - 1, Math.round(idx)));
   const real = ESTACIONES[k].n;
-  m.real = true;
-  m.finReal = Math.round(g.reloj);
+  m.estado = "hecha";
+  m.finReal = Math.max(m.iniReal !== undefined ? m.iniReal : m.ini, Math.round(g.reloj));
   m.hastaReal = real;
   if (real !== m.hasta) m.motivo = motivo || "terminó antes";
 }
 
-/* Al rotar antes de tiempo la marcha en curso acaba ahí y nace otra en
-   sentido contrario, que sustituye a las que ya no se van a hacer.      */
+/* Al rotar antes de tiempo la marcha en curso acaba ahí y nace otra en sentido
+   contrario, que ocupa el lugar de la siguiente prevista.               */
 function partirMarcha(g, t, idx, dir) {
-  const m = marchaActual(t);
+  const m = marchaEnCurso(t);
   const k = Math.max(0, Math.min(N - 1, Math.round(idx)));
   cerrarMarcha(g, t, k, "rotación anticipada");
-  const pos = (t.marchas || []).indexOf(m);
-  const destino = dir === "alcala" ? ALCALA : PIO;
+  const r = Math.round(g.reloj);
+  const recorrido = dir === "alcala" ? ESTACIONES[N - 1].t - ESTACIONES[k].t : ESTACIONES[k].t;
   const nueva = {
-    ini: Math.round(g.reloj),
-    fin: Math.round(g.reloj) + (dir === "alcala" ? ESTACIONES[N - 1].t - ESTACIONES[k].t : LLEGA_PIO - (LLEGA_PIO - ESTACIONES[k].t)),
+    ini: r,
+    fin: r + Math.max(1, recorrido),
     desde: ESTACIONES[k].n,
-    hasta: destino,
+    hasta: dir === "alcala" ? ALCALA : PIO,
     dir,
-    num: numDeMarcha(g.reloj, dir === "pio", t.esVacio),
-    real: false,
-    inicioReal: Math.round(g.reloj),
+    num: numDeMarcha(r, dir === "pio", t.esVacio),
+    estado: "curso",
+    iniReal: r,
   };
+  if (!t.marchas) t.marchas = [];
+  const pos = m ? t.marchas.indexOf(m) : -1;
   if (pos >= 0) t.marchas.splice(pos + 1, 0, nueva);
   else t.marchas.push(nueva);
+}
+
+/* Cada minuto: arranca la marcha que toca y da por hechas las que ya han
+   vencido sin que se registrara su llegada, para que el cuadro no se quede
+   atascado en una marcha antigua.                                       */
+function avanzarMarchas(g, t, r) {
+  for (const m of t.marchas || []) {
+    if (m.estado === "hecha") continue;
+    if (m.estado === "curso" && r >= m.fin + 45) {
+      // vencida de largo sin llegada: se da por hecha como estaba prevista
+      m.estado = "hecha";
+      m.finReal = m.finReal !== undefined ? m.finReal : Math.round(m.fin);
+      m.hastaReal = m.hastaReal || m.hasta;
+    }
+    if (m.estado === "prevista" && r >= m.fin) {
+      m.estado = "hecha";
+      m.finReal = Math.round(m.fin);
+      m.hastaReal = m.hasta;
+      // una circulación retirada no llegó a hacerla
+      if (t.estado === "suprimido" || !t.unidades.length) m.motivo = "no efectuada";
+    }
+  }
+  if (t.estado !== "suprimido" && !marchaEnCurso(t)) arrancarMarcha(t, r);
 }
 
 function rotacionDelDia(t, desde = 5 * 60, hasta = 24 * 60) {
@@ -529,9 +640,12 @@ function rotacionDelDia(t, desde = 5 * 60, hasta = 24 * 60) {
     const llegaAlc = salePio + RECORRIDO;
     const saleAlc = salePio + SALE_ALCALA;
     const llegaPio = salePio + LLEGA_PIO;
-    if (llegaAlc >= desde && salePio <= hasta)
+    /* Se toman las marchas que solapan con la ventana. Antes bastaba con que
+       la llegada cayera dentro, así que aparecían marchas iniciadas de
+       madrugada y terminadas antes de empezar el turno.                  */
+    if (llegaAlc > desde && salePio < hasta)
       out.push({ ini: salePio, fin: llegaAlc, desde: PIO, hasta: ALCALA, dir: "alcala", num: numDeMarcha(salePio, false) });
-    if (llegaPio >= desde && saleAlc <= hasta)
+    if (llegaPio > desde && saleAlc < hasta)
       out.push({ ini: saleAlc, fin: llegaPio, desde: ALCALA, hasta: PIO, dir: "pio", num: numDeMarcha(saleAlc, true) });
   }
   return out.sort((a, b) => a.ini - b.ini);
@@ -539,12 +653,15 @@ function rotacionDelDia(t, desde = 5 * 60, hasta = 24 * 60) {
 
 const numCorto = (t, reloj) => String(numeroTren(t, reloj) % 100).padStart(2, "0");
 
+/* Descripción de dónde está el tren. Se usa siempre el nombre corto: con el
+   nombre largo en las paradas y el corto entre ellas, el texto cambiaba de
+   longitud cada pocos segundos.                                          */
 function describir(s) {
   if (s.dir === "maniobra") return `Inversión en ${s.cabecera}`;
   const e = Math.floor(s.idx);
   const f = s.idx - e;
-  if (f < 0.07) return `En ${ESTACIONES[e].n}`;
-  if (f > 0.93) return `En ${ESTACIONES[Math.min(N - 1, e + 1)].n}`;
+  if (f < 0.07) return `En ${ESTACIONES[e].corto}`;
+  if (f > 0.93) return `En ${ESTACIONES[Math.min(N - 1, e + 1)].corto}`;
   return `${ESTACIONES[e].corto} → ${ESTACIONES[e + 1].corto}`;
 }
 
@@ -1087,12 +1204,22 @@ function etaPunto(t, reloj, i) {
 const tieneAgujas = (i) => i === 0 || i === N - 1 || !!ESTACIONES[i].rot || !!ESTACIONES[i].agujas;
 
 // tramo entre agujas que queda en vía única por una incidencia en `idx`
+/* Extremos del tramo de vía única que provoca una incidencia: las estaciones
+   con agujas más próximas por cada lado. Los dos límites se sujetan al rango
+   de la línea; si no, una incidencia en la última estación devolvía un tramo
+   que terminaba una estación más allá del final y todo lo que consultara esa
+   posición se venía abajo.                                              */
 function limitesTramo(idx) {
-  let a = idx;
+  const p = Math.max(0, Math.min(N - 1, Math.round(idx)));
+  let a = p;
   while (a > 0 && !tieneAgujas(a)) a -= 1;
-  let b = idx + (tieneAgujas(idx) ? 1 : 0);
+  let b = Math.min(N - 1, p + (tieneAgujas(p) ? 1 : 0));
   while (b < N - 1 && !tieneAgujas(b)) b += 1;
-  if (b <= a) b = Math.min(N - 1, a + 1);
+  if (b <= a) {
+    // en el último tramo de la línea se retrocede en vez de salirse
+    if (a >= N - 1) a = Math.max(0, N - 2);
+    b = Math.min(N - 1, a + 1);
+  }
   return { a, b };
 }
 
@@ -2572,7 +2699,8 @@ function comenzarTurno(slots, apart, camp) {
   if (camp && camp.retrasos) trenes.forEach((t, j) => { if (camp.retrasos[j] !== undefined) t.retraso = camp.retrasos[j]; });
 
   // el cuadro completo del día: lo que cada circulación debería hacer
-  for (const t of trenes) t.marchas = rotacionDelDia(t, INICIO - 60, FIN + 60).map((m) => ({ ...m, real: false }));
+  // solo las marchas del turno: las de antes no le corresponden a este puesto
+  for (const t of trenes) t.marchas = rotacionDelDia(t, INICIO, FIN).map((m) => ({ ...m, estado: "prevista" }));
 
   // una circulación sin material arranca fuera de servicio
   for (const t of trenes) if (!t.unidades.length && !t.reponer) t.estado = "suprimido";
@@ -2591,7 +2719,7 @@ function comenzarTurno(slots, apart, camp) {
     reloj: INICIO,
     ultimoMin: INICIO,
     marcha: true,
-    vel: 4,
+    vel: 1, // toda partida empieza a velocidad real
     trenes,
     personal,
     reserva,
@@ -2799,8 +2927,7 @@ function minuto(g) {
       t.relevo = programarRelevo(t, maq, r);
     }
     // al volver al servicio retoma el cuadro desde la marcha en curso
-    const sigRep = marchaActual(t);
-    if (sigRep) sigRep.inicioReal = Math.round(r);
+    arrancarMarcha(t, r); // retoma el cuadro desde la marcha que toque
     log(g, "ok", `Circulación ${t.i}: vuelve al servicio en ${ESTACIONES[rep.idx].n} como ${numeroTren(t, r)} con ${t.unidades.map((u) => u.id).join(" + ")}.`);
   }
 
@@ -3153,8 +3280,9 @@ function minuto(g) {
     if (cruza(SALE_ALCALA) || cruza(0)) {
       t.avisoCab = false;
       // la marcha siguiente ya figura en el cuadro: solo se anota la salida real
-      const sig = marchaActual(t);
-      if (sig && sig.inicioReal === undefined) sig.inicioReal = Math.round(r);
+      // salida de cabecera: se anota la hora real de inicio
+      const sig = marchaEnCurso(t) || arrancarMarcha(t, r);
+      if (sig && sig.iniReal === undefined) sig.iniReal = Math.round(r);
     }
     if (cruza(LLEGA_ALCALA) || cruza(LLEGA_PIO)) {
       t.pax = new Array(N).fill(0);
@@ -3431,6 +3559,9 @@ function minuto(g) {
     }
     g.vacios = pend;
   }
+
+  // el cuadro avanza solo: arranca lo que toca y cierra lo vencido
+  for (const t of g.trenes) avanzarMarchas(g, t, r);
 
   aplicarSeparacion(g);
 
@@ -4025,19 +4156,19 @@ const CLIP_BAJA = "polygon(0% 0%, 100% 0%, 100% 68%, 50% 100%, 0% 68%)";
 const CLIP_SUBE = "polygon(50% 0%, 100% 32%, 100% 100%, 0% 100%, 0% 32%)";
 
 const ST = {
-  wrap: { background: P.ground, color: P.ink, minHeight: "100vh", fontFamily: "'Archivo', system-ui, sans-serif", maxWidth: 540, margin: "0 auto", padding: "14px 14px 40px" },
-  card: { background: P.surface, borderRadius: 12, border: `1px solid ${P.rule}` },
-  eyebrow: { fontSize: 10, letterSpacing: 1.8, textTransform: "uppercase", color: P.muted, fontWeight: 600 },
+  wrap: { background: P.ground, color: P.ink, minHeight: "100vh", fontFamily: FUENTE, maxWidth: 540, margin: "0 auto", padding: "14px 14px 40px" },
+  card: { background: P.surface, borderRadius: R.grande, border: `1px solid ${P.rule}`, boxShadow: SOMBRA.card },
+  eyebrow: { fontSize: T.menor, letterSpacing: 1.8, textTransform: "uppercase", color: P.muted, fontWeight: 600 },
   btn: (on) => ({
     flex: 1,
     border: `1px solid ${on ? P.ink : P.rule}`,
     background: on ? P.ink : P.surface,
-    color: on ? "#fff" : P.ink,
-    borderRadius: 8,
+    color: on ? P.blanco : P.ink,
+    borderRadius: R.normal,
     padding: "9px 0",
-    fontSize: 13,
+    fontSize: T.base,
     fontWeight: 600,
-    fontFamily: "ui-monospace, monospace",
+    fontFamily: MONO,
     cursor: "pointer",
   }),
 };
@@ -4053,6 +4184,7 @@ export default function CGOC7() {
   const [reponerDe, setReponerDe] = useState(null);
   const [apartaderoDe, setApartaderoDe] = useState(null);
   const [vacioDe, setVacioDe] = useState(null);
+  const [focoTren, setFocoTren] = useState(null); // tren al que ir en el mapa
   const [unidadSel, setUnidadSel] = useState(null);
   const [tallerAbierto, setTallerAbierto] = useState(null);
   const [gestionUd, setGestionUd] = useState(null);
@@ -4065,9 +4197,22 @@ export default function CGOC7() {
   /* Al cambiar de pantalla o de pestaña se sube arriba del todo. Sin esto,
      al pasar de la propuesta de taller al puesto de mando la vista se quedaba
      a la altura en la que estaba y aparecías a media pantalla.           */
+  /* Al cambiar de pantalla o pestaña se sube arriba del todo, salvo cuando se
+     viene de pulsar la flecha de un tren: ahí manda el desplazamiento hasta su
+     posición. Se usa una marca de un solo uso en vez de mirar el foco, porque
+     al borrarse el aviso el efecto volvía a dispararse y devolvía la vista al
+     principio justo después de haber llegado al tren.                     */
+  const saltarSubida = useRef(false);
   useEffect(() => {
+    if (saltarSubida.current) {
+      saltarSubida.current = false;
+      return;
+    }
     window.scrollTo({ top: 0, behavior: "auto" });
-  }, [pantalla, tab, trenSel, estSel, unidadSel]);
+    // el arranque del turno también cuenta: al abrirlo no cambia ni la pantalla
+    // ni la pestaña, solo aparece la partida, y la vista se quedaba a la altura
+    // en la que estuviera la asignación de material
+  }, [pantalla, tab, trenSel, estSel, unidadSel, !!g]);
   const [camp, setCamp] = useState(null);
   const [cargando, setCargando] = useState(true);
   const [modo, setModo] = useState("campana");
@@ -4168,31 +4313,31 @@ export default function CGOC7() {
       <div style={ST.wrap}>
         <Fonts />
         <div style={ST.eyebrow}>Relevo de turno · {hhmm(FIN)}</div>
-        <h1 style={{ fontSize: 33, fontWeight: 700, letterSpacing: -1, margin: "4px 0 14px", lineHeight: 1.05 }}>{nota}</h1>
-        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 8, marginBottom: 14 }}>
-          <Kpi k="Puntualidad" v={`${punt.toFixed(1)}%`} c={punt >= 92 ? P.ok : punt >= 75 ? P.warn : P.alert} />
+        <h1 style={{ fontSize: T.cabecera, fontWeight: 700, letterSpacing: -1, margin: "4px 0 14px", lineHeight: 1.05 }}>{nota}</h1>
+        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 8, marginBottom: 16 }}>
+          <Kpi k="Puntualidad" v={`${punt.toFixed(1)}%`} c={colPuntualidad(punt)} />
           <Kpi k="Afectados" v={nf(g.kpi.afect)} c={P.ink} />
           <Kpi k="Coste extra" v={`${(g.kpi.coste / 1000).toFixed(1)}k €`} c={P.ink} />
         </div>
-        <div style={{ ...ST.card, padding: 13, marginBottom: 12, fontSize: 14 }}>
+        <div style={{ ...ST.card, padding: 12, marginBottom: 12, fontSize: T.alto }}>
           {activos.length} de {CIRCULACIONES} circulaciones al cierre · {g.trenes.filter((t) => t.estado === "degradado").length} degradadas ·{" "}
           {g.incCount} incidencia{g.incCount !== 1 ? "s" : ""}
         </div>
         <div style={{ ...ST.card, padding: 12, maxHeight: 280, overflowY: "auto" }}>
-          <div style={{ ...ST.eyebrow, marginBottom: 7 }}>Incidencias del turno</div>
+          <div style={{ ...ST.eyebrow, marginBottom: 8 }}>Incidencias del turno</div>
           {g.log.filter((l) => l.k === "bad" || l.k === "aviso").map((l, i) => (
-            <div key={i} style={{ fontSize: 12.5, marginBottom: 4, display: "flex", gap: 7 }}>
-              <span style={{ color: P.muted, fontFamily: "ui-monospace, monospace" }}>{hhmm(l.m)}</span>
+            <div key={i} style={{ fontSize: T.base, marginBottom: 4, display: "flex", gap: 8 }}>
+              <span style={{ color: P.muted, fontFamily: MONO }}>{hhmm(l.m)}</span>
               <span style={{ color: l.k === "bad" ? P.alert : P.warn }}>{l.t}</span>
             </div>
           ))}
         </div>
-        <div style={{ ...ST.card, padding: 13, margin: "12px 0", display: "flex", alignItems: "center", gap: 10 }}>
-          <span style={{ fontSize: 12.5, color: P.muted, flex: 1, lineHeight: 1.4 }}>
+        <div style={{ ...ST.card, padding: 12, margin: "12px 0", display: "flex", alignItems: "center", gap: 12 }}>
+          <span style={{ fontSize: T.base, color: P.muted, flex: 1, lineHeight: 1.4 }}>
             Puntuación del turno
             {modo === "campana" && camp ? ` · acumulado ${nf(camp.acum.puntos + puntosTurno(g))}` : ""}
           </span>
-          <span style={{ fontSize: 22, fontWeight: 700, fontFamily: "ui-monospace, monospace", color: puntosTurno(g) >= 800 ? P.ok : puntosTurno(g) >= 500 ? P.warn : P.alert }}>
+          <span style={{ fontSize: T.cabecera, fontWeight: 700, fontFamily: MONO, color: puntosTurno(g) >= 800 ? P.ok : puntosTurno(g) >= 500 ? P.warn : P.alert }}>
             {nf(puntosTurno(g))}
           </span>
         </div>
@@ -4213,7 +4358,7 @@ export default function CGOC7() {
             // en campaña se enlaza directamente con el turno siguiente
             setPantalla(modo === "campana" ? "asignacion" : "portada");
           }}
-          style={{ ...ST.btn(true), width: "100%", padding: "14px 0", fontSize: 15 }}
+          style={{ ...ST.btn(true), width: "100%", padding: "14px 0", fontSize: T.alto }}
         >
           {modo === "campana" ? "Cerrar turno y continuar" : "Terminar partida"}
         </button>
@@ -4225,10 +4370,9 @@ export default function CGOC7() {
     <div style={ST.wrap}>
       <Fonts />
       {/* la barra fija hace de cabecera: el resto de la pantalla scrollea bajo ella */}
-      <BarraSuperior g={g} setG={setG} tab={tab} setTab={setTab} />
-      <div style={{ height: 88 }} />
+      <BarraMando g={g} setG={setG} tab={tab} setTab={setTab} />
 
-      {tab === "trenes" && <Trenes g={g} setRotarDe={setRotarDe} setTrenSel={setTrenSel} setVolverA={setVolverA} setApartarDe={setApartarDe} setSuprimirDe={setSuprimirDe} setReponerDe={setReponerDe} setApartaderoDe={setApartaderoDe} setUnidadSel={setUnidadSel} />}
+      {tab === "trenes" && <Trenes g={g} verEnMapa={(n) => { saltarSubida.current = true; setFocoTren(n); setTab("mapa"); }} setRotarDe={setRotarDe} setTrenSel={setTrenSel} setVolverA={setVolverA} setApartarDe={setApartarDe} setSuprimirDe={setSuprimirDe} setReponerDe={setReponerDe} setApartaderoDe={setApartaderoDe} setUnidadSel={setUnidadSel} />}
       {tab === "personal" && <Personal g={g} />}
       {tab === "taller" && (
         <Taller
@@ -4244,8 +4388,14 @@ export default function CGOC7() {
           }}
         />
       )}
-      {tab === "mapa" && <Mapa g={g} detalle={detalle} setDetalle={setDetalle} setEstSel={setEstSel} setTrenSel={setTrenSel} setVolverA={setVolverA} />}
+      {tab === "mapa" && (
+        <Mapa g={g} detalle={detalle} setDetalle={setDetalle} setEstSel={setEstSel} setTrenSel={setTrenSel} setVolverA={setVolverA} foco={focoTren} setFoco={setFocoTren} />
+      )}
       {tab === "libro" && <Libro g={g} />}
+
+      {/* hueco para que la barra de mando no tape el final del contenido:
+          70 px de barra más la franja de gestos del móvil */}
+      <div style={{ height: "calc(78px + env(safe-area-inset-bottom))" }} />
 
       {rotarDe !== null && <SelectorRotacion g={g} setG={setG} i={rotarDe} close={() => setRotarDe(null)} />}
       {apartarDe !== null && <SelectorApartado g={g} setG={setG} i={apartarDe} close={() => setApartarDe(null)} />}
@@ -4326,21 +4476,21 @@ export default function CGOC7() {
       )}
 
       {aviso && (
-        <div style={{ position: "fixed", inset: 0, background: "rgba(10,14,17,.5)", display: "flex", alignItems: "center", justifyContent: "center", padding: 16, zIndex: 70 }}>
-          <div style={{ ...ST.card, borderColor: aviso.tipo === "inc" ? P.alert : P.warn, borderWidth: 1.5, padding: 16, maxWidth: 460, width: "100%", maxHeight: "88vh", overflowY: "auto" }}>
+        <div style={{ position: "fixed", inset: 0, background: "rgba(10,14,17,.5)", animation: "cgo-fondo .18s ease-out", display: "flex", alignItems: "center", justifyContent: "center", padding: 16, zIndex: 70 }}>
+          <div style={{ ...ST.card, borderColor: aviso.tipo === "inc" ? P.alert : P.warn, borderWidth: 1.5, padding: 16, maxWidth: 460, width: "100%", maxHeight: "88vh", overflowY: "auto", boxShadow: SOMBRA.hoja, animation: "cgo-hoja .22s ease-out" }}>
             <div style={{ ...ST.eyebrow, color: aviso.tipo === "inc" ? P.alert : P.warn }}>
               {aviso.tipo === "inc" ? "Incidencia" : "Requiere decisión"} · {hhmm(g.reloj)}
             </div>
-            <div style={{ fontSize: 19, fontWeight: 700, letterSpacing: -0.4, margin: "4px 0 5px", lineHeight: 1.2 }}>{aviso.titulo}</div>
-            <div style={{ fontSize: 14, color: P.muted, lineHeight: 1.5, marginBottom: 13 }}>{aviso.texto}</div>
+            <div style={{ fontSize: T.titulo, fontWeight: 700, letterSpacing: -0.4, margin: "4px 0 5px", lineHeight: 1.2 }}>{aviso.titulo}</div>
+            <div style={{ fontSize: T.alto, color: P.muted, lineHeight: 1.5, marginBottom: 12 }}>{aviso.texto}</div>
             {aviso.opciones.map((o, i) => (
               <button
                 key={i}
                 onClick={() => setG((p) => aplicar(clonar(p), o.ef))}
-                style={{ display: "block", width: "100%", textAlign: "left", background: P.surface, border: `1px solid ${P.rule}`, borderRadius: 9, padding: "11px 13px", marginBottom: 7, fontFamily: "inherit", cursor: "pointer", color: P.ink }}
+                style={{ display: "block", width: "100%", textAlign: "left", background: P.surface, border: `1px solid ${P.rule}`, borderRadius: R.normal, padding: "11px 13px", marginBottom: 8, fontFamily: "inherit", cursor: "pointer", color: P.ink }}
               >
-                <div style={{ fontSize: 14.5, fontWeight: 600 }}>{o.label}</div>
-                <div style={{ fontSize: 12.5, color: P.muted, marginTop: 2 }}>{o.detalle}</div>
+                <div style={{ fontSize: T.alto, fontWeight: 600 }}>{o.label}</div>
+                <div style={{ fontSize: T.base, color: P.muted, marginTop: 2 }}>{o.detalle}</div>
               </button>
             ))}
           </div>
@@ -4366,12 +4516,35 @@ export default function CGOC7() {
    modo de juego, dos tarjetas con marca de agua, franja de rasgos
    y pie con el perfil de la ciudad.                              */
 
-const AZUL = "#0E2038";
-const AZUL_OSC = "#0A1B2E";
-const ROJO_CM = "#D7282F";
-const ROJO_OSC = "#A81D22";
+/* Paleta de la portada. Estaba escrita a mano por todo el componente, con
+   dieciséis tonos sueltos que nadie podía ajustar sin buscarlos uno a uno. */
+const PORT = {
+  azul: "#0E2038",
+  azulOsc: "#0A1B2E",
+  rojo: "#D7282F",
+  rojoOsc: "#A81D22",
+  texto: "#33475C", // sobre fondo claro
+  textoSuave: "#4C6076",
+  rotulo: "#54687E", // versalitas de sección
+  apagado: "#78899C", // pies y apostillas
+  claro: "#B9C9D8", // texto sobre fondo oscuro
+  claroSuave: "#8FA6BC",
+  linea: "#D4DDE5", // separadores sobre claro
+  lineaOsc: "#2A4059", // separadores sobre oscuro
+  fondo: "#E9EDF1",
+  fondoSuave: "#F1F5F8",
+  fondoTenue: "#F3F6F8",
+  trazo: "#C9D3DC", // marca de agua del andén
+  trazoOsc: "#17324B", // marca de agua de la sala de control
+  perfil: "#24425F", // silueta de la ciudad
+};
 
-function IconoPortada({ tipo, c = "#fff", t = 22, grosor = 2 }) {
+const AZUL = PORT.azul;
+const AZUL_OSC = PORT.azulOsc;
+const ROJO_CM = PORT.rojo;
+const ROJO_OSC = PORT.rojoOsc;
+
+function IconoPortada({ tipo, c = P.blanco, t = 22, grosor = 2 }) {
   const p = { fill: "none", stroke: c, strokeWidth: grosor, strokeLinecap: "round", strokeLinejoin: "round" };
   const svg = (hijos) => (
     <svg width={t} height={t} viewBox="0 0 24 24" style={{ display: "block" }}>
@@ -4471,7 +4644,7 @@ function EscenaTren() {
 }
 // marca de agua de cada tarjeta: andén y sala de control
 function MarcaTarjeta({ tipo }) {
-  const col = tipo === "anden" ? "#C9D3DC" : "#17324B";
+  const col = tipo === "anden" ? PORT.trazo : PORT.trazoOsc;
   return (
     <svg viewBox="0 0 200 150" preserveAspectRatio="xMidYMid slice" style={{ position: "absolute", right: 0, top: 0, height: "100%", width: "62%", opacity: tipo === "anden" ? 0.5 : 0.55 }}>
       {tipo === "anden" ? (
@@ -4499,7 +4672,7 @@ function MarcaTarjeta({ tipo }) {
 }
 
 // perfil de la ciudad para el pie
-function Skyline({ c = "#24425F" }) {
+function Skyline({ c = PORT.perfil }) {
   return (
     <svg viewBox="0 0 220 46" preserveAspectRatio="xMaxYMax meet" style={{ position: "absolute", right: 0, bottom: 0, height: "100%", width: 170, opacity: 0.45 }}>
       <g fill={c}>
@@ -4550,20 +4723,20 @@ function Portada({ camp, cargando, elegir }) {
           background: oscura ? AZUL_OSC : "#FFFFFF",
           border: "none",
           borderLeft: `6px solid ${ROJO_CM}`,
-          borderRadius: 14,
+          borderRadius: R.grande,
           padding: 0,
-          marginBottom: 11,
+          marginBottom: 12,
           fontFamily: "inherit",
           cursor: cargando ? "wait" : inactiva ? "not-allowed" : "pointer",
-          color: oscura ? "#fff" : AZUL,
-          boxShadow: "0 6px 20px rgba(10,27,46,.13)",
+          color: oscura ? P.blanco : AZUL,
+          boxShadow: SOMBRA.elevado,
           overflow: "hidden",
           opacity: cargando ? 0.6 : inactiva ? 0.45 : 1,
         }}
       >
         <MarcaTarjeta tipo={d.m} />
         <span style={{ position: "relative", display: "block", padding: "20px 18px 17px" }}>
-          <span style={{ display: "flex", alignItems: "center", gap: 15, marginBottom: 14 }}>
+          <span style={{ display: "flex", alignItems: "center", gap: 16, marginBottom: 16 }}>
             <span
               style={{
                 width: 52,
@@ -4574,27 +4747,27 @@ function Portada({ camp, cargando, elegir }) {
                 alignItems: "center",
                 justifyContent: "center",
                 flexShrink: 0,
-                boxShadow: "0 3px 10px rgba(215,40,47,.4)",
+                boxShadow: `0 3px 10px ${PORT.rojo}66`, // el icono destaca sobre la tarjeta
               }}
             >
               <IconoPortada tipo={d.ic} t={26} />
             </span>
             <span style={{ minWidth: 0, flex: 1 }}>
-              <span style={{ fontSize: 19, fontWeight: 800, letterSpacing: 0.2, display: "block", lineHeight: 1.1 }}>{d.n}</span>
-              <span style={{ display: "block", width: 38, height: 4, background: ROJO_CM, borderRadius: 2, marginTop: 8 }} />
+              <span style={{ fontSize: T.titulo, fontWeight: 800, letterSpacing: 0.2, display: "block", lineHeight: 1.1 }}>{d.n}</span>
+              <span style={{ display: "block", width: 38, height: 4, background: ROJO_CM, borderRadius: R.hilo, marginTop: 8 }} />
             </span>
             {id === "campana" && enCurso && (
-              <span style={{ fontSize: 9, fontWeight: 800, letterSpacing: 0.7, color: "#fff", background: ROJO_CM, borderRadius: 4, padding: "3px 7px", flexShrink: 0 }}>EN CURSO</span>
+              <span style={{ fontSize: T.micro, fontWeight: 800, letterSpacing: 0.7, color: P.blanco, background: ROJO_CM, borderRadius: R.menudo, padding: "3px 7px", flexShrink: 0 }}>EN CURSO</span>
             )}
           </span>
 
-          <span style={{ display: "block", fontSize: 13, lineHeight: 1.6, color: oscura ? "#B9C9D8" : "#4C6076", maxWidth: 260 }}>{d.t}</span>
+          <span style={{ display: "block", fontSize: T.base, lineHeight: 1.6, color: oscura ? PORT.claro : PORT.textoSuave, maxWidth: 260 }}>{d.t}</span>
 
-          <span style={{ display: "block", borderTop: `1px dashed ${oscura ? "#2A4059" : "#D4DDE5"}`, margin: "16px 0 12px" }} />
+          <span style={{ display: "block", borderTop: `1px dashed ${oscura ? PORT.lineaOsc : PORT.linea}`, margin: "16px 0 12px" }} />
 
-          <span style={{ display: "flex", alignItems: "center", gap: 9 }}>
-            <IconoPortada tipo={d.pi} c={oscura ? "#8FA6BC" : "#78899C"} t={16} grosor={1.8} />
-            <span style={{ fontSize: 12, color: oscura ? "#8FA6BC" : "#78899C" }}>{d.p}</span>
+          <span style={{ display: "flex", alignItems: "center", gap: 8 }}>
+            <IconoPortada tipo={d.pi} c={oscura ? PORT.claroSuave : PORT.apagado} t={16} grosor={1.8} />
+            <span style={{ fontSize: T.aux, color: oscura ? PORT.claroSuave : PORT.apagado }}>{d.p}</span>
           </span>
         </span>
       </button>
@@ -4608,21 +4781,21 @@ function Portada({ camp, cargando, elegir }) {
   ];
 
   return (
-    <div style={{ ...ST.wrap, padding: 0, background: "#E9EDF1", minHeight: "100vh", overflowX: "hidden" }}>
+    <div style={{ ...ST.wrap, padding: 0, background: PORT.fondo, minHeight: "100vh", overflowX: "hidden" }}>
       <Fonts />
 
       {/* ── cabecera con la escena ── */}
-      <div style={{ position: "relative", minHeight: 330, overflow: "hidden", background: "#F1F5F8" }}>
+      <div style={{ position: "relative", minHeight: 330, overflow: "hidden", background: PORT.fondoSuave }}>
         <EscenaTren />
         <div style={{ position: "relative", padding: "26px 16px 30px" }}>
-          <div style={{ fontSize: 9.5, letterSpacing: 2.6, textTransform: "uppercase", color: "#54687E", fontWeight: 700 }}>Centro de Gestión de Operaciones</div>
-          <div style={{ fontSize: 58, fontWeight: 800, color: AZUL, letterSpacing: -3, lineHeight: 0.86, marginTop: 8 }}>CGO</div>
-          <div style={{ fontSize: 47, fontWeight: 800, color: ROJO_CM, letterSpacing: -2.4, lineHeight: 0.94, marginTop: 2 }}>Simulator</div>
-          <div style={{ display: "flex", alignItems: "center", gap: 11, marginTop: 14 }}>
-            <span style={{ width: 32, height: 4, background: ROJO_CM, borderRadius: 2 }} />
-            <span style={{ fontSize: 15, color: "#33475C", fontWeight: 600 }}>Cercanías Madrid</span>
+          <div style={{ fontSize: T.micro, letterSpacing: 2.6, textTransform: "uppercase", color: PORT.rotulo, fontWeight: 700 }}>Centro de Gestión de Operaciones</div>
+          <div style={{ fontSize: T.cartelXL, fontWeight: 800, color: AZUL, letterSpacing: -3, lineHeight: 0.86, marginTop: 8 }}>CGO</div>
+          <div style={{ fontSize: T.cartel, fontWeight: 800, color: ROJO_CM, letterSpacing: -2.4, lineHeight: 0.94, marginTop: 2 }}>Simulator</div>
+          <div style={{ display: "flex", alignItems: "center", gap: 12, marginTop: 16 }}>
+            <span style={{ width: 32, height: 4, background: ROJO_CM, borderRadius: R.hilo }} />
+            <span style={{ fontSize: T.alto, color: PORT.texto, fontWeight: 600 }}>Cercanías Madrid</span>
           </div>
-          <div style={{ fontSize: 12.5, color: "#4C6076", lineHeight: 1.6, marginTop: 14, maxWidth: 215 }}>
+          <div style={{ fontSize: T.base, color: PORT.textoSuave, lineHeight: 1.6, marginTop: 16, maxWidth: 215 }}>
             Gestiona operaciones, planifica turnos y toma decisiones en tiempo real.
           </div>
         </div>
@@ -4634,9 +4807,9 @@ function Portada({ camp, cargando, elegir }) {
           style={{
             display: "inline-flex",
             alignItems: "center",
-            gap: 9,
+            gap: 8,
             background: AZUL_OSC,
-            color: "#fff",
+            color: P.blanco,
             padding: "10px 30px 10px 15px",
             borderRadius: "10px 0 0 0",
             clipPath: "polygon(0 0, 100% 0, calc(100% - 20px) 100%, 0 100%)",
@@ -4644,7 +4817,7 @@ function Portada({ camp, cargando, elegir }) {
           }}
         >
           <IconoPortada tipo="tren" c={ROJO_CM} t={16} />
-          <span style={{ fontSize: 11, fontWeight: 800, letterSpacing: 1.6 }}>MODO DE JUEGO</span>
+          <span style={{ fontSize: T.aux, fontWeight: 800, letterSpacing: 1.6 }}>MODO DE JUEGO</span>
         </div>
       </div>
 
@@ -4657,7 +4830,7 @@ function Portada({ camp, cargando, elegir }) {
 
       {/* ── franja de rasgos ── */}
       <div style={{ padding: "6px 14px 18px" }}>
-        <div style={{ background: "#F3F6F8", borderRadius: 14, display: "flex", padding: "4px 0" }}>
+        <div style={{ background: PORT.fondoTenue, borderRadius: R.grande, display: "flex", padding: "4px 0" }}>
           {rasgos.map((r, k) => (
             <div
               key={r.n}
@@ -4669,14 +4842,14 @@ function Portada({ camp, cargando, elegir }) {
                 display: "flex",
                 flexDirection: "column",
                 alignItems: "center",
-                gap: 7,
+                gap: 8,
                 textAlign: "center",
               }}
             >
               <IconoPortada tipo={r.i} c={ROJO_CM} t={20} grosor={1.9} />
               <span style={{ minWidth: 0 }}>
-                <span style={{ display: "block", fontSize: 11.5, fontWeight: 700, color: AZUL, lineHeight: 1.25 }}>{r.n}</span>
-                <span style={{ display: "block", fontSize: 10, color: "#78899C", marginTop: 3, lineHeight: 1.3 }}>{r.d}</span>
+                <span style={{ display: "block", fontSize: T.aux, fontWeight: 700, color: AZUL, lineHeight: 1.25 }}>{r.n}</span>
+                <span style={{ display: "block", fontSize: T.menor, color: PORT.apagado, marginTop: 4, lineHeight: 1.3 }}>{r.d}</span>
               </span>
             </div>
           ))}
@@ -4685,10 +4858,10 @@ function Portada({ camp, cargando, elegir }) {
 
       {/* ── pie ── */}
       <div style={{ position: "relative", background: AZUL_OSC, padding: "18px 14px", overflow: "hidden" }}>
-        <Skyline c="#24425F" />
+        <Skyline c={PORT.perfil} />
         <div style={{ position: "relative", textAlign: "center" }}>
-          <span style={{ fontSize: 12.5, color: "#B9C9D8" }}>Tú controlas la red. </span>
-          <span style={{ fontSize: 12.5, color: ROJO_CM, fontWeight: 700 }}>Cada decisión cuenta.</span>
+          <span style={{ fontSize: T.base, color: PORT.claro }}>Tú controlas la red. </span>
+          <span style={{ fontSize: T.base, color: ROJO_CM, fontWeight: 700 }}>Cada decisión cuenta.</span>
         </div>
       </div>
     </div>
@@ -4698,13 +4871,13 @@ function Portada({ camp, cargando, elegir }) {
 function Logo({ pequeno }) {
   return (
     <div style={{ marginBottom: pequeno ? 18 : 30 }}>
-      <div style={{ fontSize: 9.5, letterSpacing: 2.4, textTransform: "uppercase", color: "#5C7188", fontWeight: 700 }}>Centro de Gestión de Operaciones</div>
+      <div style={{ fontSize: T.micro, letterSpacing: 2.4, textTransform: "uppercase", color: PORT.rotulo, fontWeight: 700 }}>Centro de Gestión de Operaciones</div>
       <h1 style={{ fontSize: pequeno ? 34 : 52, fontWeight: 800, letterSpacing: pequeno ? -1.5 : -2.4, lineHeight: 0.92, margin: "4px 0 0", color: AZUL }}>
         CGO <span style={{ color: ROJO_CM }}>Simulator</span>
       </h1>
-      <div style={{ display: "flex", alignItems: "center", gap: 9, marginTop: 10 }}>
-        <span style={{ height: 3, width: 30, background: ROJO_CM, borderRadius: 2 }} />
-        <span style={{ fontSize: 13, color: P.muted }}>Cercanías Madrid</span>
+      <div style={{ display: "flex", alignItems: "center", gap: 8, marginTop: 12 }}>
+        <span style={{ height: 3, width: 30, background: ROJO_CM, borderRadius: R.hilo }} />
+        <span style={{ fontSize: T.base, color: P.muted }}>Cercanías Madrid</span>
       </div>
     </div>
   );
@@ -4720,7 +4893,7 @@ function Seleccion({ modo, camp, cargando, atras, empezar, nueva }) {
       <Fonts />
       <button
         onClick={atras}
-        style={{ all: "unset", cursor: "pointer", display: "inline-flex", alignItems: "center", gap: 5, fontSize: 12.5, fontWeight: 600, color: P.muted, marginBottom: 12 }}
+        style={{ all: "unset", cursor: "pointer", display: "inline-flex", alignItems: "center", gap: 4, fontSize: T.base, fontWeight: 600, color: P.muted, marginBottom: 12 }}
       >
         ‹ Modo de juego
       </button>
@@ -4728,19 +4901,19 @@ function Seleccion({ modo, camp, cargando, atras, empezar, nueva }) {
       <Logo pequeno />
 
       <div style={{ ...ST.eyebrow, marginBottom: 8 }}>Línea</div>
-      <div style={{ display: "flex", flexWrap: "wrap", gap: 6, marginBottom: 8 }}>
+      <div style={{ display: "flex", flexWrap: "wrap", gap: 8, marginBottom: 8 }}>
         {LINEAS_NUCLEO.map((l) => (
           <span
             key={l.id}
             title={l.n}
             style={{
-              fontSize: 13,
+              fontSize: T.base,
               fontWeight: 700,
-              fontFamily: "ui-monospace, monospace",
-              color: "#fff",
+              fontFamily: MONO,
+              color: P.blanco,
               background: LIN[l.id],
               opacity: l.id === LINEA ? 1 : 0.28,
-              borderRadius: 6,
+              borderRadius: R.normal,
               padding: "5px 11px",
             }}
           >
@@ -4748,7 +4921,7 @@ function Seleccion({ modo, camp, cargando, atras, empezar, nueva }) {
           </span>
         ))}
       </div>
-      <div style={{ fontSize: 12, color: P.muted, marginBottom: 22, lineHeight: 1.45 }}>
+      <div style={{ fontSize: T.aux, color: P.muted, marginBottom: 24, lineHeight: 1.45 }}>
         Disponible la <strong style={{ color: P.ink }}>{LINEA}</strong>, {LINEAS_NUCLEO.find((l) => l.id === LINEA).n}. El resto del núcleo llegará más
         adelante.
       </div>
@@ -4756,7 +4929,7 @@ function Seleccion({ modo, camp, cargando, atras, empezar, nueva }) {
       {modo === "rapida" ? (
         <>
           <div style={{ ...ST.eyebrow, marginBottom: 8 }}>Turno</div>
-          <div style={{ display: "flex", gap: 7, marginBottom: 22 }}>
+          <div style={{ display: "flex", gap: 8, marginBottom: 24 }}>
             {TURNOS.map((t) => {
               const sel = turno === t.id;
               return (
@@ -4767,9 +4940,9 @@ function Seleccion({ modo, camp, cargando, atras, empezar, nueva }) {
                   style={{
                     flex: 1,
                     background: sel && t.ok ? P.ink : P.surface,
-                    color: sel && t.ok ? "#fff" : P.ink,
+                    color: sel && t.ok ? P.blanco : P.ink,
                     border: `1px solid ${sel && t.ok ? P.ink : P.rule}`,
-                    borderRadius: 10,
+                    borderRadius: R.grande,
                     padding: "12px 6px",
                     fontFamily: "inherit",
                     cursor: t.ok ? "pointer" : "not-allowed",
@@ -4777,8 +4950,8 @@ function Seleccion({ modo, camp, cargando, atras, empezar, nueva }) {
                     textAlign: "center",
                   }}
                 >
-                  <div style={{ fontSize: 14, fontWeight: 700 }}>{t.n}</div>
-                  <div style={{ fontSize: 10.5, marginTop: 2, fontFamily: "ui-monospace, monospace", color: sel && t.ok ? "#C7CDD2" : P.muted }}>
+                  <div style={{ fontSize: T.alto, fontWeight: 700 }}>{t.n}</div>
+                  <div style={{ fontSize: T.menor, marginTop: 2, fontFamily: MONO, color: sel && t.ok ? PORT.linea : P.muted }}>
                     {t.ok ? t.h : "próximamente"}
                   </div>
                 </button>
@@ -4789,17 +4962,17 @@ function Seleccion({ modo, camp, cargando, atras, empezar, nueva }) {
       ) : (
         <>
           <div style={{ ...ST.eyebrow, marginBottom: 8 }}>{enCurso ? "Campaña en curso" : "Nueva campaña"}</div>
-          <div style={{ ...ST.card, padding: 14, marginBottom: 22 }}>
+          <div style={{ ...ST.card, padding: 16, marginBottom: 24 }}>
             <div style={{ display: "flex", alignItems: "baseline", gap: 8, marginBottom: enCurso ? 10 : 0 }}>
-              <span style={{ fontSize: 20, fontWeight: 700, letterSpacing: -0.5, flex: 1 }}>
+              <span style={{ fontSize: T.titulo, fontWeight: 700, letterSpacing: -0.5, flex: 1 }}>
                 Día {camp ? camp.dia : 1} · turno de {defT.n.toLowerCase()}
               </span>
-              <span style={{ fontSize: 12, color: P.muted, fontFamily: "ui-monospace, monospace" }}>{defT.h}</span>
+              <span style={{ fontSize: T.aux, color: P.muted, fontFamily: MONO }}>{defT.h}</span>
             </div>
             {enCurso && (
-              <div style={{ display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: 5 }}>
+              <div style={{ display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: 4 }}>
                 <Kpi k="Turnos" v={String(camp.acum.turnos)} c={P.ink} small />
-                <Kpi k="Punt." v={`${camp.acum.punt.toFixed(0)}%`} c={camp.acum.punt >= 92 ? P.ok : camp.acum.punt >= 75 ? P.warn : P.alert} small />
+                <Kpi k="Punt." v={`${camp.acum.punt.toFixed(0)}%`} c={colPuntualidad(camp.acum.punt)} small />
                 <Kpi k="Afectados" v={nf(camp.acum.afect)} c={P.ink} small />
                 <Kpi k="Puntos" v={nf(camp.acum.puntos)} c={P.ok} small />
               </div>
@@ -4811,7 +4984,7 @@ function Seleccion({ modo, camp, cargando, atras, empezar, nueva }) {
       <button
         onClick={() => empezar(modo === "rapida" ? turno : null)}
         disabled={cargando}
-        style={{ ...ST.btn(true), width: "100%", padding: "15px 0", fontSize: 15, fontFamily: "inherit", letterSpacing: 0.3, opacity: cargando ? 0.5 : 1 }}
+        style={{ ...ST.btn(true), width: "100%", padding: "15px 0", fontSize: T.alto, fontFamily: "inherit", letterSpacing: 0.3, opacity: cargando ? 0.5 : 1 }}
       >
         {modo === "rapida" ? "Entrar al puesto de mando" : enCurso ? "Continuar la campaña" : "Empezar campaña"}
       </button>
@@ -4819,7 +4992,7 @@ function Seleccion({ modo, camp, cargando, atras, empezar, nueva }) {
       {modo === "campana" && enCurso && (
         <button
           onClick={nueva}
-          style={{ width: "100%", background: "transparent", border: "none", color: P.muted, padding: "12px 0 0", fontFamily: "inherit", fontSize: 12.5, fontWeight: 600, cursor: "pointer" }}
+          style={{ width: "100%", background: "transparent", border: "none", color: P.muted, padding: "12px 0 0", fontFamily: "inherit", fontSize: T.base, fontWeight: 600, cursor: "pointer" }}
         >
           Empezar una campaña nueva
         </button>
@@ -4847,26 +5020,26 @@ function Relevo({ asig, camp, empezar }) {
     <div style={ST.wrap}>
       <Fonts />
       <div style={ST.eyebrow}>Relevo de turno · {hhmm(INICIO)}</div>
-      <h1 style={{ fontSize: 27, fontWeight: 700, letterSpacing: -1, lineHeight: 1.05, margin: "3px 0 6px" }}>
+      <h1 style={{ fontSize: T.cabecera, fontWeight: 700, letterSpacing: -1, lineHeight: 1.05, margin: "3px 0 6px" }}>
         {camp ? `Día ${camp.dia} · ` : ""}turno de {(TURNOS.find((x) => x.id === TURNO_ID) || TURNOS[0]).n.toLowerCase()}
       </h1>
-      <div style={{ fontSize: 13, color: P.muted, lineHeight: 1.5, marginBottom: 16 }}>
+      <div style={{ fontSize: T.base, color: P.muted, lineHeight: 1.5, marginBottom: 16 }}>
         El servicio ya está en marcha. Te haces cargo de {CIRCULACIONES} circulaciones con el material que dejó el turno anterior: aquí no se asigna
         nada, solo se toma el mando.
       </div>
 
-      <div style={{ display: "flex", gap: 6, marginBottom: 14 }}>
+      <div style={{ display: "flex", gap: 8, marginBottom: 16 }}>
         <Kpi k="En línea" v={`${CIRCULACIONES}`} c={P.ok} small />
         <Kpi k="Plazas" v={`${(plazas / 1000).toFixed(1)}k`} c={P.ink} small />
         <Kpi k="Punta" v={nf(demPunta)} c={P.warn} small />
       </div>
 
       {flojas.length > 0 && (
-        <div style={{ ...ST.card, padding: 12, marginBottom: 10, borderColor: P.alert }}>
-          <div style={{ fontSize: 12.5, fontWeight: 700, color: P.alert, marginBottom: 4 }}>
+        <div style={{ ...ST.card, padding: 12, marginBottom: 12, borderColor: P.alert }}>
+          <div style={{ fontSize: T.base, fontWeight: 700, color: P.alert, marginBottom: 4 }}>
             {flojas.length} unidad{flojas.length === 1 ? "" : "es"} no llega al final del turno
           </div>
-          <div style={{ fontSize: 11.5, color: P.muted, fontFamily: "ui-monospace, monospace", lineHeight: 1.5 }}>
+          <div style={{ fontSize: T.aux, color: P.muted, fontFamily: MONO, lineHeight: 1.5 }}>
             {flojas.map((u) => `${u.id} · ${Math.round(u.desgaste)} %`).join("  ·  ")}
           </div>
         </div>
@@ -4875,7 +5048,7 @@ function Relevo({ asig, camp, empezar }) {
       {camp && camp.retrasos && (
         <div style={{ ...ST.card, padding: 12, marginBottom: 12, borderColor: camp.retrasos.some((x) => x > 5) ? P.warn : P.rule }}>
           <div style={{ ...ST.eyebrow, marginBottom: 8 }}>Cómo te dejan la línea</div>
-          <div style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: 6 }}>
+          <div style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: 8 }}>
             <Kpi
               k="Retraso medio"
               v={`${(camp.retrasos.reduce((n, v) => n + v, 0) / Math.max(1, camp.retrasos.length)).toFixed(1)}′`}
@@ -4885,7 +5058,7 @@ function Relevo({ asig, camp, empezar }) {
             <Kpi k="En andén" v={nf((camp.andenes || []).reduce((n, a2) => n + a2.alcala + a2.pio, 0))} c={P.ink} small />
             <Kpi k="Restricc." v={String((camp.restricciones || []).length)} c={(camp.restricciones || []).length ? P.warn : P.ok} small />
           </div>
-          <div style={{ fontSize: 11.5, color: P.muted, marginTop: 9, lineHeight: 1.45 }}>
+          <div style={{ fontSize: T.aux, color: P.muted, marginTop: 8, lineHeight: 1.45 }}>
             Los retrasos, los viajeros que siguen esperando y las restricciones vigentes pasan contigo al turno entrante.
           </div>
         </div>
@@ -4894,14 +5067,14 @@ function Relevo({ asig, camp, empezar }) {
       <div style={ST.eyebrow}>Composiciones en servicio</div>
       <div style={{ ...ST.card, padding: 12, margin: "6px 0 10px" }}>
         {comps.map((c, k) => (
-          <div key={k} style={{ display: "flex", alignItems: "center", gap: 8, padding: "6px 10px", margin: "0 -12px", borderRadius: 6, background: fondoFila(k) }}>
-            <span style={{ fontSize: 10.5, color: P.muted, width: 22, flexShrink: 0 }}>{String(k + 1).padStart(2, "0")}</span>
-            <span style={{ fontSize: 12.5, fontFamily: "ui-monospace, monospace", fontWeight: 600, flex: 1, minWidth: 0, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
+          <div key={k} style={{ display: "flex", alignItems: "center", gap: 8, padding: "6px 10px", margin: "0 -12px", borderRadius: R.normal, background: fondoFila(k) }}>
+            <span style={{ fontSize: T.menor, color: P.muted, width: 22, flexShrink: 0 }}>{String(k + 1).padStart(2, "0")}</span>
+            <span style={{ fontSize: T.base, fontFamily: MONO, fontWeight: 600, flex: 1, minWidth: 0, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
               {c.map((u) => u.id).join(" + ") || "—"}
             </span>
-            <span style={{ fontSize: 11, color: P.muted, flexShrink: 0 }}>{nf(c.reduce((m, u) => m + u.plazas, 0))} pl</span>
+            <span style={{ fontSize: T.aux, color: P.muted, flexShrink: 0 }}>{nf(c.reduce((m, u) => m + u.plazas, 0))} pl</span>
             <span
-              style={{ fontSize: 11, fontWeight: 700, fontFamily: "ui-monospace, monospace", flexShrink: 0, color: c.some((u) => !cubreTurno(u)) ? P.alert : P.muted }}
+              style={{ fontSize: T.aux, fontWeight: 700, fontFamily: MONO, flexShrink: 0, color: c.some((u) => !cubreTurno(u)) ? P.alert : P.muted }}
             >
               {Math.round(Math.max(...c.map((u) => u.desgaste), 0))}%
             </span>
@@ -4916,11 +5089,11 @@ function Relevo({ asig, camp, empezar }) {
             {apartadas.map(([clv, par], k) => {
               const [idx, via] = clv.split("|");
               return (
-                <div key={clv} style={{ display: "flex", alignItems: "center", gap: 8, padding: "6px 10px", margin: "0 -12px", borderRadius: 6, background: fondoFila(k) }}>
-                  <span style={{ fontSize: 12, flex: 1, minWidth: 0, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
+                <div key={clv} style={{ display: "flex", alignItems: "center", gap: 8, padding: "6px 10px", margin: "0 -12px", borderRadius: R.normal, background: fondoFila(k) }}>
+                  <span style={{ fontSize: T.aux, flex: 1, minWidth: 0, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
                     {ESTACIONES[idx].n} · {via}
                   </span>
-                  <span style={{ fontSize: 11.5, fontFamily: "ui-monospace, monospace", color: P.muted, flexShrink: 0 }}>
+                  <span style={{ fontSize: T.aux, fontFamily: MONO, color: P.muted, flexShrink: 0 }}>
                     {par.filter(Boolean).join(" + ")}
                   </span>
                 </div>
@@ -4930,7 +5103,7 @@ function Relevo({ asig, camp, empezar }) {
         </>
       )}
 
-      <button onClick={empezar} style={{ ...ST.btn(true), width: "100%", padding: "15px 0", fontSize: 15, fontFamily: "inherit" }}>
+      <button onClick={empezar} style={{ ...ST.btn(true), width: "100%", padding: "15px 0", fontSize: T.alto, fontFamily: "inherit" }}>
         Tomar el servicio
       </button>
     </div>
@@ -4951,15 +5124,15 @@ function Asignacion({ asig, setAsig, slotSel, setSlotSel, empezar, camp }) {
   return (
     <div style={ST.wrap}>
       <Fonts />
-      <div style={{ display: "flex", alignItems: "center", gap: 9, marginBottom: 4 }}>
-        <span style={{ background: ROJO, color: "#fff", fontSize: 17, fontWeight: 700, padding: "2px 9px", borderRadius: 6 }}>C-7</span>
+      <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 4 }}>
+        <span style={{ background: ROJO, color: P.blanco, fontSize: T.titulo, fontWeight: 700, padding: "2px 9px", borderRadius: R.normal }}>C-7</span>
         <div style={{ lineHeight: 1.1 }}>
-          <div style={{ fontSize: 13.5, fontWeight: 700 }}>Asignación de material</div>
-          <div style={{ fontSize: 11, color: P.muted }}>Antes de abrir el turno de mañana</div>
+          <div style={{ fontSize: T.base, fontWeight: 700 }}>Asignación de material</div>
+          <div style={{ fontSize: T.aux, color: P.muted }}>Antes de abrir el turno de mañana</div>
         </div>
       </div>
 
-      <div style={{ ...ST.card, padding: 13, margin: "12px 0", fontSize: 13, lineHeight: 1.5, color: P.muted }}>
+      <div style={{ ...ST.card, padding: 12, margin: "12px 0", fontSize: T.base, lineHeight: 1.5, color: P.muted }}>
         {CIRCULACIONES} circulaciones. Las <strong style={{ color: P.ink }}>446 y 465</strong> circulan acopladas de dos en dos; la{" "}
         <strong style={{ color: P.ink }}>450 de doble piso</strong> presta servicio en composición simple. La demanda en punta ronda los{" "}
         <strong style={{ color: P.ink }}>{nf(demPunta)} viajeros</strong> a bordo por circulación. Vigila el{" "}
@@ -4969,14 +5142,14 @@ function Asignacion({ asig, setAsig, slotSel, setSlotSel, empezar, camp }) {
       {(() => {
         const cortas = [...usadas].map(uni).filter((u) => u && !cubreTurno(u));
         return cortas.length ? (
-          <div style={{ ...ST.card, borderColor: P.alert, padding: "9px 12px", marginBottom: 10, fontSize: 12.5, lineHeight: 1.45 }}>
+          <div style={{ ...ST.card, borderColor: P.alert, padding: "9px 12px", marginBottom: 12, fontSize: T.base, lineHeight: 1.45 }}>
             <strong style={{ color: P.alert }}>{cortas.length} unidad(es) no llegan al final del turno</strong>: {cortas.map((u) => u.id).join(", ")}. Les
             vencerá la revisión en línea.
           </div>
         ) : null;
       })()}
 
-      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr 1fr", gap: 6, marginBottom: 10 }}>
+      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr 1fr", gap: 8, marginBottom: 12 }}>
         <Kpi k="Cubiertas" v={`${listas}/${CIRCULACIONES}`} c={completo ? P.ok : P.warn} small />
         <Kpi k="450 libres" v={String(lib("450"))} c={P.ink} small />
         <Kpi k="465 libres" v={String(lib("465"))} c={P.ink} small />
@@ -4984,18 +5157,18 @@ function Asignacion({ asig, setAsig, slotSel, setSlotSel, empezar, camp }) {
       </div>
 
       <div style={{ ...ST.card, padding: "10px 12px", marginBottom: 12 }}>
-        <div style={{ display: "flex", justifyContent: "space-between", fontSize: 11.5, color: P.muted, marginBottom: 5 }}>
+        <div style={{ display: "flex", justifyContent: "space-between", fontSize: T.aux, color: P.muted, marginBottom: 4 }}>
           <span>Circulaciones que cubren la punta</span>
-          <span style={{ fontFamily: "ui-monospace, monospace", fontWeight: 700, color: cubiertas === CIRCULACIONES ? P.ok : P.warn }}>
+          <span style={{ fontFamily: MONO, fontWeight: 700, color: cubiertas === CIRCULACIONES ? P.ok : P.warn }}>
             {cubiertas}/{CIRCULACIONES}
           </span>
         </div>
-        <div style={{ height: 5, background: P.sunken, borderRadius: 3, overflow: "hidden" }}>
+        <div style={{ height: 5, background: P.sunken, borderRadius: R.menudo, overflow: "hidden" }}>
           <div style={{ width: `${(cubiertas / CIRCULACIONES) * 100}%`, height: "100%", background: cubiertas === CIRCULACIONES ? P.ok : P.warn }} />
         </div>
       </div>
 
-      <div style={{ display: "flex", gap: 6, marginBottom: 14 }}>
+      <div style={{ display: "flex", gap: 8, marginBottom: 16 }}>
         <button onClick={() => setAsig({ ...asig, ...propuestaTaller(camp) })} style={{ ...ST.btn(false), fontFamily: "inherit" }}>
           Propuesta de taller
         </button>
@@ -5011,29 +5184,29 @@ function Asignacion({ asig, setAsig, slotSel, setSlotSel, empezar, camp }) {
         const cubre = plazas >= demPunta;
         const lista = slotCompleto(par);
         return (
-          <div key={i} style={{ ...ST.card, padding: 11, marginBottom: 8, borderColor: lista ? P.rule : P.warn }}>
-            <div style={{ display: "flex", alignItems: "center", gap: 9, marginBottom: 8 }}>
-              <div style={{ width: 20, height: 22, background: ROJO, borderRadius: 3, color: "#fff", fontSize: 11, fontWeight: 700, fontFamily: "ui-monospace, monospace", display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 }}>
+          <div key={i} style={{ ...ST.card, padding: 12, marginBottom: 8, borderColor: lista ? P.rule : P.warn }}>
+            <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 8 }}>
+              <div style={{ width: 20, height: 22, background: ROJO, borderRadius: R.menudo, color: P.blanco, fontSize: T.aux, fontWeight: 700, fontFamily: MONO, display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 }}>
                 {i + 1}
               </div>
-              <span style={{ fontSize: 13, fontWeight: 700 }}>Circulación {i + 1}</span>
-              <span style={{ fontSize: 10.5, color: P.muted, fontFamily: "ui-monospace, monospace" }}>
+              <span style={{ fontSize: T.base, fontWeight: 700 }}>Circulación {i + 1}</span>
+              <span style={{ fontSize: T.menor, color: P.muted, fontFamily: MONO }}>
                 sale como {numeroTren({ offset: i * INTERVALO, retraso: 0 }, INICIO)}
               </span>
               {u0 && (
-                <span style={{ fontSize: 10, fontWeight: 700, color: "#fff", background: SERIE_COLOR[u0.serie], borderRadius: 3, padding: "1px 5px", fontFamily: "ui-monospace, monospace" }}>
+                <span style={{ fontSize: T.menor, fontWeight: 700, color: P.blanco, background: SERIE_COLOR[u0.serie], borderRadius: R.menudo, padding: "1px 5px", fontFamily: MONO }}>
                   {u0.serie} {simple ? "simple" : "doble"}
                 </span>
               )}
-              <span style={{ fontSize: 11.5, marginLeft: "auto", fontFamily: "ui-monospace, monospace", fontWeight: 600, color: plazas === 0 ? P.muted : cubre ? P.ok : P.warn }}>
+              <span style={{ fontSize: T.aux, marginLeft: "auto", fontFamily: MONO, fontWeight: 600, color: plazas === 0 ? P.muted : cubre ? P.ok : P.warn }}>
                 {nf(plazas)} pl.
               </span>
             </div>
-            <div style={{ display: "flex", gap: 6 }}>
+            <div style={{ display: "flex", gap: 8 }}>
               {[0, 1].map((j) => {
                 if (j === 1 && simple)
                   return (
-                    <div key={j} style={{ flex: 1, border: `1px dashed ${P.rule}`, borderRadius: 8, padding: "8px 9px", fontSize: 11.5, color: P.muted, display: "flex", alignItems: "center", justifyContent: "center" }}>
+                    <div key={j} style={{ flex: 1, border: `1px dashed ${P.rule}`, borderRadius: R.normal, padding: "8px 9px", fontSize: T.aux, color: P.muted, display: "flex", alignItems: "center", justifyContent: "center" }}>
                       composición simple
                     </div>
                   );
@@ -5042,18 +5215,18 @@ function Asignacion({ asig, setAsig, slotSel, setSlotSel, empezar, camp }) {
                   <button
                     key={j}
                     onClick={() => setSlotSel({ i, j })}
-                    style={{ flex: 1, textAlign: "left", background: P.surface, border: `1px solid ${u ? P.rule : P.alert}`, borderRadius: 8, padding: "8px 9px", fontFamily: "inherit", cursor: "pointer", color: P.ink, minWidth: 0 }}
+                    style={{ flex: 1, textAlign: "left", background: P.surface, border: `1px solid ${u ? P.rule : P.alert}`, borderRadius: R.normal, padding: "8px 9px", fontFamily: "inherit", cursor: "pointer", color: P.ink, minWidth: 0 }}
                   >
                     {u ? (
                       <>
-                        <div style={{ fontSize: 13, fontWeight: 700, fontFamily: "ui-monospace, monospace" }}>{u.id}</div>
-                        <div style={{ display: "flex", gap: 6, fontSize: 10.5, color: P.muted, marginTop: 2 }}>
+                        <div style={{ fontSize: T.base, fontWeight: 700, fontFamily: MONO }}>{u.id}</div>
+                        <div style={{ display: "flex", gap: 8, fontSize: T.menor, color: P.muted, marginTop: 2 }}>
                           <span style={{ color: u.fiab >= 0.97 ? P.ok : u.fiab >= 0.945 ? P.warn : P.alert }}>{Math.round(u.fiab * 100)}%</span>
                           <span style={{ color: !cubreTurno(u) ? P.alert : turnosRestantes(u) < 2 ? P.warn : P.muted }}>{Math.round(u.desgaste)}% desg.</span>
                         </div>
                       </>
                     ) : (
-                      <div style={{ fontSize: 12.5, color: P.muted, padding: "6px 0" }}>— asignar —</div>
+                      <div style={{ fontSize: T.base, color: P.muted, padding: "6px 0" }}>— asignar —</div>
                     )}
                   </button>
                 );
@@ -5064,7 +5237,7 @@ function Asignacion({ asig, setAsig, slotSel, setSlotSel, empezar, camp }) {
       })}
 
       <div style={{ ...ST.eyebrow, margin: "18px 0 6px" }}>Material apartado</div>
-      <div style={{ ...ST.card, padding: 12, marginBottom: 10, fontSize: 12.5, color: P.muted, lineHeight: 1.5 }}>
+      <div style={{ ...ST.card, padding: 12, marginBottom: 12, fontSize: T.base, color: P.muted, lineHeight: 1.5 }}>
         Puedes dejar composiciones estacionadas en Príncipe Pío, Chamartín y Alcalá por si las necesitas durante el turno.
       </div>
 
@@ -5074,12 +5247,12 @@ function Asignacion({ asig, setAsig, slotSel, setSlotSel, empezar, camp }) {
         const ocupadas = est.apartVias.filter((v) => (asig.apart[clave(idx, v)] || []).some(Boolean));
         const rotLibres = (est.rotVias || []).filter((v) => !ocupadas.includes(v)).length;
         return (
-          <div key={idx} style={{ ...ST.card, padding: 11, marginBottom: 8 }}>
+          <div key={idx} style={{ ...ST.card, padding: 12, marginBottom: 8 }}>
             <div style={{ display: "flex", alignItems: "baseline", gap: 8, marginBottom: 8 }}>
-              <span style={{ fontSize: 13.5, fontWeight: 700 }}>{est.n}</span>
-              {est.apartSeries && <span style={{ fontSize: 10.5, color: P.muted }}>solo serie {est.apartSeries.join("/")}</span>}
+              <span style={{ fontSize: T.base, fontWeight: 700 }}>{est.n}</span>
+              {est.apartSeries && <span style={{ fontSize: T.menor, color: P.muted }}>solo serie {est.apartSeries.join("/")}</span>}
               {compartidas.length > 0 && (
-                <span style={{ fontSize: 10.5, marginLeft: "auto", color: rotLibres ? P.muted : P.alert, fontWeight: rotLibres ? 400 : 700 }}>
+                <span style={{ fontSize: T.menor, marginLeft: "auto", color: rotLibres ? P.muted : P.alert, fontWeight: rotLibres ? 400 : 700 }}>
                   {rotLibres} vía(s) libres para invertir
                 </span>
               )}
@@ -5088,17 +5261,17 @@ function Asignacion({ asig, setAsig, slotSel, setSlotSel, empezar, camp }) {
               const par = asig.apart[clave(idx, via)] || [null, null];
               const simple = esSimple(par[0]);
               return (
-                <div key={via} style={{ display: "flex", gap: 6, alignItems: "center", marginBottom: 6 }}>
-                  <span style={{ fontSize: 11, color: P.muted, width: 46, fontFamily: "ui-monospace, monospace", flexShrink: 0 }}>{via}</span>
+                <div key={via} style={{ display: "flex", gap: 8, alignItems: "center", marginBottom: 8 }}>
+                  <span style={{ fontSize: T.aux, color: P.muted, width: 46, fontFamily: MONO, flexShrink: 0 }}>{via}</span>
                   {[0, 1].map((j) => {
                     if (j === 1 && simple)
-                      return <div key={j} style={{ flex: 1, border: `1px dashed ${P.rule}`, borderRadius: 8, padding: "7px 9px", fontSize: 11, color: P.muted, textAlign: "center" }}>simple</div>;
+                      return <div key={j} style={{ flex: 1, border: `1px dashed ${P.rule}`, borderRadius: R.normal, padding: "7px 9px", fontSize: T.aux, color: P.muted, textAlign: "center" }}>simple</div>;
                     const u = par[j] ? uni(par[j]) : null;
                     return (
                       <button
                         key={j}
                         onClick={() => setSlotSel({ apart: clave(idx, via), j, series: est.apartSeries })}
-                        style={{ flex: 1, textAlign: "left", background: P.surface, border: `1px solid ${P.rule}`, borderRadius: 8, padding: "7px 9px", fontFamily: "ui-monospace, monospace", fontSize: 12, cursor: "pointer", color: u ? P.ink : P.muted }}
+                        style={{ flex: 1, textAlign: "left", background: P.surface, border: `1px solid ${P.rule}`, borderRadius: R.normal, padding: "7px 9px", fontFamily: MONO, fontSize: T.aux, cursor: "pointer", color: u ? P.ink : P.muted }}
                       >
                         {u ? u.id : "— libre —"}
                       </button>
@@ -5114,7 +5287,7 @@ function Asignacion({ asig, setAsig, slotSel, setSlotSel, empezar, camp }) {
       <button
         onClick={empezar}
         disabled={!completo}
-        style={{ ...ST.btn(completo), width: "100%", padding: "14px 0", fontSize: 15, fontFamily: "inherit", opacity: completo ? 1 : 0.45, cursor: completo ? "pointer" : "not-allowed" }}
+        style={{ ...ST.btn(completo), width: "100%", padding: "14px 0", fontSize: T.alto, fontFamily: "inherit", opacity: completo ? 1 : 0.45, cursor: completo ? "pointer" : "not-allowed" }}
       >
         {completo ? "Abrir el turno" : `Faltan ${CIRCULACIONES - listas} circulaciones por cubrir`}
       </button>
@@ -5173,11 +5346,11 @@ function SelectorUnidad({ usadas, actual, pareja, primera, soloSeries, close, el
   };
 
   return (
-    <div onClick={close} style={{ position: "fixed", inset: 0, background: "rgba(10,14,17,.45)", display: "flex", alignItems: "flex-end", justifyContent: "center", zIndex: 60 }}>
-      <div onClick={(e) => e.stopPropagation()} style={{ background: P.surface, width: "100%", maxWidth: 540, maxHeight: "80vh", overflowY: "auto", borderRadius: "16px 16px 0 0", padding: 16 }}>
-        <div style={{ ...ST.eyebrow, marginBottom: 9 }}>Material disponible</div>
+    <div onClick={close} style={{ position: "fixed", inset: 0, background: "rgba(10,14,17,.45)", animation: "cgo-fondo .18s ease-out", display: "flex", alignItems: "flex-end", justifyContent: "center", zIndex: 60 }}>
+      <div onClick={(e) => e.stopPropagation()} style={{ background: P.surface, width: "100%", maxWidth: 540, maxHeight: "80vh", overflowY: "auto", borderRadius: `${R.grande + 2}px ${R.grande + 2}px 0 0`, padding: 16, boxShadow: SOMBRA.hoja, animation: "cgo-hoja .22s ease-out" }}>
+        <div style={{ ...ST.eyebrow, marginBottom: 8 }}>Material disponible</div>
 
-        <div style={{ display: "flex", gap: 6, marginBottom: 10 }}>
+        <div style={{ display: "flex", gap: 8, marginBottom: 12 }}>
           {series.map((s) => {
             const bloqueada = serieObligada && serieObligada !== s;
             return (
@@ -5188,13 +5361,13 @@ function SelectorUnidad({ usadas, actual, pareja, primera, soloSeries, close, el
                 style={{
                   flex: 1,
                   background: serie === s ? P.ink : P.surface,
-                  color: serie === s ? "#fff" : P.ink,
+                  color: serie === s ? P.blanco : P.ink,
                   border: `1px solid ${serie === s ? P.ink : P.rule}`,
-                  borderRadius: 8,
+                  borderRadius: R.normal,
                   padding: "8px 0",
-                  fontSize: 13,
+                  fontSize: T.base,
                   fontWeight: 700,
-                  fontFamily: "ui-monospace, monospace",
+                  fontFamily: MONO,
                   cursor: bloqueada ? "not-allowed" : "pointer",
                   opacity: bloqueada ? 0.4 : 1,
                 }}
@@ -5206,29 +5379,29 @@ function SelectorUnidad({ usadas, actual, pareja, primera, soloSeries, close, el
         </div>
 
         {serieObligada && (
-          <div style={{ fontSize: 11.5, color: P.muted, marginBottom: 10 }}>
+          <div style={{ fontSize: T.aux, color: P.muted, marginBottom: 12 }}>
             La composición ya lleva una {serieObligada}: no se pueden acoplar series distintas.
           </div>
         )}
         {!serieObligada && serie === "450" && (
-          <div style={{ fontSize: 11.5, color: P.muted, marginBottom: 10 }}>
+          <div style={{ fontSize: T.aux, color: P.muted, marginBottom: 12 }}>
             Doble piso en composición simple: una sola rama cubre la circulación entera.
           </div>
         )}
 
         {deps.length > 0 && (
-          <div style={{ display: "flex", gap: 5, marginBottom: 12, flexWrap: "wrap" }}>
+          <div style={{ display: "flex", gap: 4, marginBottom: 12, flexWrap: "wrap" }}>
             {(deps.length > 1 ? ["todos", ...deps] : deps).map((d) => (
               <button
                 key={d}
                 onClick={() => setDep(d)}
                 style={{
                   background: dep === d ? P.ink : P.surface,
-                  color: dep === d ? "#fff" : P.ink,
+                  color: dep === d ? P.blanco : P.ink,
                   border: `1px solid ${dep === d ? P.ink : P.rule}`,
-                  borderRadius: 20,
+                  borderRadius: R.pastilla,
                   padding: "5px 11px",
-                  fontSize: 12,
+                  fontSize: T.aux,
                   fontWeight: 600,
                   fontFamily: "inherit",
                   cursor: "pointer",
@@ -5236,7 +5409,7 @@ function SelectorUnidad({ usadas, actual, pareja, primera, soloSeries, close, el
               >
                 {d === "todos" ? "Todos" : d}
                 {d !== "todos" && (
-                  <span style={{ opacity: 0.65, marginLeft: 5, fontFamily: "ui-monospace, monospace" }}>
+                  <span style={{ opacity: 0.65, marginLeft: 4, fontFamily: MONO }}>
                     {deSerie.filter((u) => u.deposito === d && !u.enTaller).length}
                   </span>
                 )}
@@ -5258,30 +5431,30 @@ function SelectorUnidad({ usadas, actual, pareja, primera, soloSeries, close, el
                 width: "100%",
                 textAlign: "left",
                 background: sel ? P.ink : P.surface,
-                color: sel ? "#fff" : P.ink,
+                color: sel ? P.blanco : P.ink,
                 border: `1px solid ${P.rule}`,
-                borderRadius: 9,
+                borderRadius: R.normal,
                 padding: "10px 12px",
-                marginBottom: 6,
+                marginBottom: 8,
                 fontFamily: "inherit",
                 cursor: bloqueada ? "not-allowed" : "pointer",
                 opacity: bloqueada ? 0.42 : 1,
               }}
             >
               <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-                <span style={{ fontSize: 14, fontWeight: 700, fontFamily: "ui-monospace, monospace" }}>{u.id}</span>
+                <span style={{ fontSize: T.alto, fontWeight: 700, fontFamily: MONO }}>{u.id}</span>
                 {u.deposito && (
-                  <span style={{ fontSize: 9, fontWeight: 700, color: "#fff", background: DEPOSITOS[u.deposito].color, borderRadius: 3, padding: "1px 5px" }}>{u.deposito}</span>
+                  <span style={{ fontSize: T.micro, fontWeight: 700, color: P.blanco, background: DEPOSITOS[u.deposito].color, borderRadius: R.menudo, padding: "1px 5px" }}>{u.deposito}</span>
                 )}
                 {DEPOSITOS[u.deposito].nota && !u.enTaller && (
-                  <span style={{ fontSize: 9, fontWeight: 700, color: sel ? "#fff" : P.muted, border: `1px solid ${P.rule}`, borderRadius: 3, padding: "0 4px" }}>CEDIDA</span>
+                  <span style={{ fontSize: T.micro, fontWeight: 700, color: sel ? P.blanco : P.muted, border: `1px solid ${P.rule}`, borderRadius: R.menudo, padding: "0 4px" }}>CEDIDA</span>
                 )}
-                {u.reformada && <span style={{ fontSize: 9, fontWeight: 700, color: sel ? "#fff" : P.muted, border: `1px solid ${P.rule}`, borderRadius: 3, padding: "0 4px" }}>REFORMADA</span>}
-                <span style={{ marginLeft: "auto", fontSize: 12, fontWeight: 700, fontFamily: "ui-monospace, monospace", color: sel ? "#fff" : u.fiab >= 0.97 ? P.ok : u.fiab >= 0.945 ? P.warn : P.alert }}>
+                {u.reformada && <span style={{ fontSize: T.micro, fontWeight: 700, color: sel ? P.blanco : P.muted, border: `1px solid ${P.rule}`, borderRadius: R.menudo, padding: "0 4px" }}>REFORMADA</span>}
+                <span style={{ marginLeft: "auto", fontSize: T.aux, fontWeight: 700, fontFamily: MONO, color: sel ? P.blanco : u.fiab >= 0.97 ? P.ok : u.fiab >= 0.945 ? P.warn : P.alert }}>
                   {Math.round(u.fiab * 100)}%
                 </span>
               </div>
-              <div style={{ fontSize: 11.5, color: sel ? "#C7CDD2" : P.muted, marginTop: 3 }}>
+              <div style={{ fontSize: T.aux, color: sel ? PORT.linea : P.muted, marginTop: 4 }}>
                 {u.enTaller
                   ? "En taller · no disponible"
                   : usadas.has(u.id) && !sel
@@ -5292,7 +5465,7 @@ function SelectorUnidad({ usadas, actual, pareja, primera, soloSeries, close, el
           );
         })}
 
-        <button onClick={close} style={{ width: "100%", background: P.sunken, border: `1px solid ${P.rule}`, borderRadius: 9, padding: 12, fontFamily: "inherit", fontWeight: 600, fontSize: 14, cursor: "pointer", color: P.ink }}>
+        <button onClick={close} style={{ width: "100%", background: P.sunken, border: `1px solid ${P.rule}`, borderRadius: R.normal, padding: 12, fontFamily: "inherit", fontWeight: 600, fontSize: T.alto, cursor: "pointer", color: P.ink }}>
           Cerrar
         </button>
       </div>
@@ -5302,7 +5475,7 @@ function SelectorUnidad({ usadas, actual, pareja, primera, soloSeries, close, el
 
 /* ── trenes ─────────────────────────────────────────────────── */
 
-function Trenes({ g, setRotarDe, setTrenSel, setVolverA, setApartarDe, setSuprimirDe, setReponerDe, setApartaderoDe, setUnidadSel }) {
+function Trenes({ g, setRotarDe, setTrenSel, setVolverA, setApartarDe, setSuprimirDe, setReponerDe, setApartaderoDe, setUnidadSel, verEnMapa }) {
   return (
     <div>
       {g.trenes.map((t) => {
@@ -5329,34 +5502,79 @@ function Trenes({ g, setRotarDe, setTrenSel, setVolverA, setApartarDe, setSuprim
           ? `Esperando vía en ${t.esperaCab.cab}`
           : t.detenido
           ? `Detenido · ${t.detenido.restante} min`
-          : describir(s);
+            : t.bloqueadoPor && g.trenes.some((x) => x.i === t.bloqueadoPor)
+            ? `${describir(s)} · detrás del ${numeroTren(g.trenes.find((x) => x.i === t.bloqueadoPor), g.reloj)}`
+            : describir(s);
         return (
           <div key={t.i} style={{ ...ST.card, borderColor: borde, padding: 12, marginBottom: 8, opacity: supr ? 0.5 : 1 }}>
-            <div onClick={() => { setVolverA(null); setTrenSel(t.i); }} style={{ display: "flex", alignItems: "center", gap: 9, cursor: "pointer" }}>
-              <div style={{ width: 20, height: 24, background: supr || t.rotando || t.detenido || t.esperaCab ? P.muted : t.esVacio ? P.ink : ROJO, clipPath: supr || t.rotando || t.detenido || t.esperaCab ? "none" : s.dir === "pio" ? CLIP_SUBE : CLIP_BAJA, borderRadius: 3, color: "#fff", fontSize: 10, fontWeight: 700, fontFamily: "ui-monospace, monospace", display: "flex", alignItems: "center", justifyContent: "center", paddingTop: s.dir === "pio" ? 5 : 0, paddingBottom: s.dir === "pio" ? 0 : 5, flexShrink: 0 }}>
+            <div onClick={() => { setVolverA(null); setTrenSel(t.i); }} style={{ display: "flex", alignItems: "center", gap: 12, cursor: "pointer" }}>
+              {/* la flecha representa la posición, así que lleva al mapa;
+                  el resto de la ficha sigue abriendo el perfil del tren */}
+              <div
+                onClick={(ev) => {
+                  ev.stopPropagation();
+                  verEnMapa(t.i);
+                }}
+                title="Ver en el mapa"
+                style={{
+                  cursor: "pointer",
+                  width: 25,
+                  height: 30,
+                  background: supr || t.rotando || t.detenido || t.esperaCab ? P.muted : t.esVacio ? P.ink : ROJO,
+                  clipPath: supr || t.rotando || t.detenido || t.esperaCab ? "none" : s.dir === "pio" ? CLIP_SUBE : CLIP_BAJA,
+                  borderRadius: R.menudo,
+                  color: P.blanco,
+                  fontSize: T.aux,
+                  fontWeight: 800,
+                  fontFamily: MONO,
+                  display: "flex",
+                  alignItems: "center",
+                  justifyContent: "center",
+                  paddingTop: s.dir === "pio" ? 6 : 0,
+                  paddingBottom: s.dir === "pio" ? 0 : 6,
+                  flexShrink: 0,
+                }}
+              >
                 {numCorto(t, g.reloj)}
               </div>
               <div style={{ flex: 1, minWidth: 0 }}>
-                <div style={{ display: "flex", alignItems: "center", gap: 5 }}>
+                <div style={{ display: "flex", alignItems: "center", gap: 8, height: 20 }}>
                   <span
                     style={{
-                      fontSize: 10.5,
+                      fontSize: T.menor,
                       fontWeight: 700,
-                      color: "#fff",
+                      color: P.blanco,
                       background: t.esVacio ? P.ink : LIN[LINEA],
-                      borderRadius: 4,
+                      borderRadius: R.menudo,
                       padding: "1px 5px",
-                      fontFamily: "ui-monospace, monospace",
+                      fontFamily: MONO,
                       flexShrink: 0,
                     }}
                   >
                     {t.esVacio ? "MV" : LINEA}
                   </span>
-                  <span style={{ fontSize: 15, fontWeight: 700, fontFamily: "ui-monospace, monospace", letterSpacing: -0.3 }}>{numeroTren(t, g.reloj)}</span>
-                  <span style={{ fontSize: 10.5, color: P.muted, letterSpacing: 0.4 }}>{t.esVacio ? "material vacío" : `circ. ${t.i}`}</span>
+                  <span style={{ fontSize: T.alto, fontWeight: 700, fontFamily: MONO, letterSpacing: -0.3 }}>{numeroTren(t, g.reloj)}</span>
+                  <span style={{ fontSize: T.menor, color: P.muted, letterSpacing: 0.4 }}>{t.esVacio ? "material vacío" : `circ. ${t.i}`}</span>
                 </div>
-                <div style={{ fontSize: 12.5, fontWeight: 600, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{txt}</div>
-                <div style={{ fontSize: 11.5, color: P.muted, fontFamily: "ui-monospace, monospace" }}>
+                {/* Altura de línea cerrada. La flecha → no existe en Archivo y el
+                    navegador la toma de otra tipografía con métricas mayores: al
+                    pasar de "En Pozuelo" a "Pozuelo → El Barrial" la caja crecía
+                    y empujaba hacia abajo todo lo que va debajo.            */}
+                <div
+                  style={{
+                    fontSize: T.base,
+                    fontWeight: 600,
+                    whiteSpace: "nowrap",
+                    overflow: "hidden",
+                    textOverflow: "ellipsis",
+                    marginTop: 4,
+                    lineHeight: "16px",
+                    height: 16,
+                  }}
+                >
+                  {txt}
+                </div>
+                <div style={{ fontSize: T.aux, color: P.muted, fontFamily: MONO, marginTop: 4, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis", lineHeight: "15px", height: 15 }}>
                   {t.unidades.length === 0 && "sin material"}
                   {t.unidades.map((u, k) => (
                     <span key={u.id}>
@@ -5378,24 +5596,26 @@ function Trenes({ g, setRotarDe, setTrenSel, setVolverA, setApartarDe, setSuprim
                   const cap = plazasDe(t) || 1;
                   const oc = Math.min(100, (ab / cap) * 100);
                   return (
-                    <div style={{ display: "flex", alignItems: "center", gap: 6, marginTop: 3 }}>
-                      <div style={{ flex: 1, height: 4, background: P.sunken, borderRadius: 2, overflow: "hidden", maxWidth: 110 }}>
-                        <div style={{ width: `${oc}%`, height: "100%", background: oc > 92 ? P.alert : oc > 70 ? P.warn : P.ok }} />
+                    <div style={{ display: "flex", alignItems: "center", gap: 8, marginTop: 8 }}>
+                      {/* anchos cerrados: la cifra crece de 980 a 1.234 y antes
+                          encogía la barra y desplazaba todo lo de al lado */}
+                      <div style={{ width: 110, height: 4, background: P.sunken, borderRadius: R.hilo, overflow: "hidden", flexShrink: 0 }}>
+                        <div style={{ width: `${oc}%`, height: "100%", background: colOcupacion(oc) }} />
                       </div>
-                      <span style={{ fontSize: 10.5, color: P.muted, fontFamily: "ui-monospace, monospace" }}>
+                      <span style={{ fontSize: T.menor, color: P.muted, fontFamily: MONO, whiteSpace: "nowrap" }}>
                         {nf(ab)}/{nf(cap)}
                       </span>
                     </div>
                   );
                 })()}
               </div>
-              <div style={{ fontFamily: "ui-monospace, monospace", fontSize: 15, fontWeight: 700, color: colRetraso(retrasoEfectivo(t)), flexShrink: 0 }}>
+              <div style={{ fontFamily: MONO, fontSize: T.alto, fontWeight: 700, color: colRetraso(retrasoEfectivo(t)), flexShrink: 0, width: 46, textAlign: "right" }}>
                 {supr ? "—" : rt(t.retraso) === 0 ? "0′" : `+${rt(t.retraso)}′`}
               </div>
             </div>
 
             {(t.rotacion || t.limitacion > 0 || t.retirarCab || t.cambio || t.apartaPaso || t.supresion || t.vacio || t.pendienteApartar || t.bloqueadoPor) && (
-              <div style={{ marginTop: 8, display: "flex", gap: 5, flexWrap: "wrap" }}>
+              <div style={{ marginTop: 12, display: "flex", gap: 4, flexWrap: "nowrap", overflow: "hidden", alignItems: "center" }}>
                 {t.rotacion && <Etiqueta txt={`Rotación en ${ESTACIONES[t.rotacion.idx].corto}`} c={P.warn} />}
                 {t.limitacion > 0 && <Etiqueta txt={`Marcha limitada +${t.limitacion}′`} c={P.warn} />}
                 {t.cambio && <Etiqueta txt={`Cambio de material en ${ESTACIONES[t.cambio.idx].corto}`} c={P.warn} />}
@@ -5415,26 +5635,29 @@ function Trenes({ g, setRotarDe, setTrenSel, setVolverA, setApartarDe, setSuprim
                 ) : (
                   t.vacio && <Etiqueta txt={t.pendienteApartar ? "En vacío · sin destino" : "En vacío · bypass de puertas"} c={P.alert} />
                 )}
-                {t.bloqueadoPor && <Etiqueta txt={`Detrás del ${numeroTren(g.trenes.find((x) => x.i === t.bloqueadoPor), g.reloj)}`} c={P.alert} />}
+                {t.bloqueadoPor &&
+                  g.trenes.some((x) => x.i === t.bloqueadoPor) && (
+                    <Etiqueta txt={`Detrás del ${numeroTren(g.trenes.find((x) => x.i === t.bloqueadoPor), g.reloj)}`} c={P.alert} />
+                  )}
                 {t.retirarCab && <Etiqueta txt="Retirada en cabecera" c={P.alert} />}
               </div>
             )}
 
             {!supr && m && (
-              <div style={{ marginTop: 9, paddingTop: 9, borderTop: `1px solid ${P.sunken}`, display: "flex", justifyContent: "space-between", alignItems: "center", gap: 10 }}>
+              <div style={{ marginTop: 8, paddingTop: 8, borderTop: `1px solid ${P.sunken}`, display: "flex", justifyContent: "space-between", alignItems: "center", gap: 12 }}>
                 <div style={{ minWidth: 0 }}>
-                  <div style={{ fontSize: 12.5, fontWeight: 600, display: "flex", alignItems: "center", gap: 7 }}>
+                  <div style={{ fontSize: T.base, fontWeight: 600, display: "flex", alignItems: "center", gap: 8 }}>
                     {m.nombre}
                     <Media m={m} />
                   </div>
-                  <div style={{ fontSize: 11.5, color: t.excesoAutorizado ? P.alert : P.muted }}>
+                  <div style={{ fontSize: T.aux, color: t.excesoAutorizado ? P.alert : P.muted }}>
                     {t.excesoAutorizado ? "Conduciendo por encima del límite" : t.relevo ? `Relevo ${hhmm(t.relevo.prevista)} · ${t.relevo.cab}` : "Sin relevo en el turno"}
                   </div>
                 </div>
                 <div style={{ textAlign: "right", flexShrink: 0 }}>
-                  <div style={{ fontSize: 11.5, color: P.muted, fontFamily: "ui-monospace, monospace" }}>{dur(m.cond)}</div>
-                  <div style={{ width: 56, height: 4, background: P.sunken, borderRadius: 2, overflow: "hidden", marginTop: 3 }}>
-                    <div style={{ width: `${Math.min(100, (m.cond / COND_MAX) * 100)}%`, height: "100%", background: m.cond > COND_MAX * 0.92 ? P.alert : m.cond > COND_MAX * 0.75 ? P.warn : P.ok }} />
+                  <div style={{ fontSize: T.aux, color: P.muted, fontFamily: MONO }}>{dur(m.cond)}</div>
+                  <div style={{ width: 56, height: 4, background: P.sunken, borderRadius: R.hilo, overflow: "hidden", marginTop: 4 }}>
+                    <div style={{ width: `${Math.min(100, (m.cond / COND_MAX) * 100)}%`, height: "100%", background: nivelCol(m.cond / COND_MAX, 0.75, 0.92) }} />
                   </div>
                 </div>
               </div>
@@ -5461,14 +5684,14 @@ function Trenes({ g, setRotarDe, setTrenSel, setVolverA, setApartarDe, setSuprim
                 }}
                 style={{
                   width: "100%",
-                  marginTop: 6,
+                  marginTop: 8,
                   background: P.surface,
                   color: t.supresion && t.supresion.via ? P.warn : P.alert,
                   border: `1px solid ${t.supresion && t.supresion.via ? P.warn : P.alert}`,
-                  borderRadius: 7,
+                  borderRadius: R.normal,
                   padding: "8px 0",
                   fontFamily: "inherit",
-                  fontSize: 12,
+                  fontSize: T.aux,
                   fontWeight: 700,
                   cursor: "pointer",
                 }}
@@ -5490,7 +5713,7 @@ function Trenes({ g, setRotarDe, setTrenSel, setVolverA, setApartarDe, setSuprim
                   setReponerDe(t.i);
                 }}
                 disabled={!!t.reponer}
-                style={{ width: "100%", marginTop: 9, background: P.surface, color: t.reponer ? P.muted : P.ok, border: `1px solid ${t.reponer ? P.sunken : P.ok}`, borderRadius: 7, padding: "9px 0", fontFamily: "inherit", fontSize: 12.5, fontWeight: 700, cursor: t.reponer ? "default" : "pointer" }}
+                style={{ width: "100%", marginTop: 8, background: P.surface, color: t.reponer ? P.muted : P.ok, border: `1px solid ${t.reponer ? P.sunken : P.ok}`, borderRadius: R.normal, padding: "9px 0", fontFamily: "inherit", fontSize: T.base, fontWeight: 700, cursor: t.reponer ? "default" : "pointer" }}
               >
                 {t.reponer ? `Repone a las ${hhmm(t.reponer.cuando)} en ${ESTACIONES[t.reponer.idx].corto}` : "Reponer circulación"}
               </button>
@@ -5509,22 +5732,22 @@ function SelectorRotacion({ g, setG, i, close }) {
   const destino = s.dir === "alcala" ? ALCALA : PIO;
 
   return (
-    <div onClick={close} style={{ position: "fixed", inset: 0, background: "rgba(10,14,17,.45)", display: "flex", alignItems: "flex-end", justifyContent: "center", zIndex: 60 }}>
-      <div onClick={(e) => e.stopPropagation()} style={{ background: P.surface, width: "100%", maxWidth: 540, maxHeight: "78vh", overflowY: "auto", borderRadius: "16px 16px 0 0", padding: 16 }}>
+    <div onClick={close} style={{ position: "fixed", inset: 0, background: "rgba(10,14,17,.45)", animation: "cgo-fondo .18s ease-out", display: "flex", alignItems: "flex-end", justifyContent: "center", zIndex: 60 }}>
+      <div onClick={(e) => e.stopPropagation()} style={{ background: P.surface, width: "100%", maxWidth: 540, maxHeight: "78vh", overflowY: "auto", borderRadius: `${R.grande + 2}px ${R.grande + 2}px 0 0`, padding: 16, boxShadow: SOMBRA.hoja, animation: "cgo-hoja .22s ease-out" }}>
         <div style={ST.eyebrow}>Rotación del {numeroTren(t, g.reloj)}</div>
-        <div style={{ fontSize: 19, fontWeight: 700, letterSpacing: -0.4, margin: "3px 0 4px" }}>{retTxt(retrasoEfectivo(t))} hacia {destino}</div>
-        <div style={{ fontSize: 13, color: P.muted, marginBottom: 14, lineHeight: 1.45 }}>
+        <div style={{ fontSize: T.titulo, fontWeight: 700, letterSpacing: -0.4, margin: "3px 0 4px" }}>{retTxt(retrasoEfectivo(t))} hacia {destino}</div>
+        <div style={{ fontSize: T.base, color: P.muted, marginBottom: 16, lineHeight: 1.45 }}>
           Termina recorrido antes de la cabecera e invierte allí para que la vuelta salga en hora, tomando el número de tren que corresponda. Solo en
           estaciones con cambio de agujas y con al menos {MIN_ANTELACION} min de antelación, que es lo que se tarda en preparar el itinerario. Si el
           ahorro supera al retraso, el tren espera en andén hasta la hora de su nueva marcha.
         </div>
         {cands.length === 0 && (
-          <div style={{ fontSize: 13, color: P.alert, background: P.sunken, borderRadius: 8, padding: "10px 12px", marginBottom: 10 }}>
+          <div style={{ fontSize: T.base, color: P.alert, background: P.sunken, borderRadius: R.normal, padding: "10px 12px", marginBottom: 12 }}>
             No hay estaciones con cambio de agujas por delante en este momento.
           </div>
         )}
         {cands.length > 0 && (
-          <div style={{ fontSize: 11.5, color: P.muted, background: P.sunken, borderRadius: 8, padding: "8px 10px", marginBottom: 10, lineHeight: 1.45 }}>
+          <div style={{ fontSize: T.aux, color: P.muted, background: P.sunken, borderRadius: R.normal, padding: "8px 10px", marginBottom: 12, lineHeight: 1.45 }}>
             Sin tocar nada, la rotación de {cands[0].cabecera} ya absorbe hasta{" "}
             <strong style={{ color: P.ink }}>{cands[0].absorbe} min</strong>: saldría{" "}
             <strong style={{ color: cands[0].siSigue > 0 ? P.warn : P.ok }}>{retTxt(cands[0].siSigue)}</strong>. Rotar antes solo compensa si mejora eso.
@@ -5539,28 +5762,28 @@ function SelectorRotacion({ g, setG, i, close }) {
               setG((p) => ({ ...p, trenes: p.trenes.map((x) => (x.i === i ? { ...x, rotacion: { idx: c.idx, q: c.q, ahorro: c.ahorro, sinServicio: c.sinServicio, delta: c.delta } } : x)) }));
               close();
             }}
-            style={{ display: "block", width: "100%", textAlign: "left", background: P.surface, border: `1px solid ${!c.tarde && c.gana > 0 ? P.rule : P.sunken}`, borderRadius: 9, padding: "11px 12px", marginBottom: 6, fontFamily: "inherit", cursor: c.tarde ? "not-allowed" : "pointer", color: P.ink, opacity: c.tarde ? 0.4 : c.gana > 0 ? 1 : 0.6 }}
+            style={{ display: "block", width: "100%", textAlign: "left", background: P.surface, border: `1px solid ${!c.tarde && c.gana > 0 ? P.rule : P.sunken}`, borderRadius: R.normal, padding: "11px 12px", marginBottom: 8, fontFamily: "inherit", cursor: c.tarde ? "not-allowed" : "pointer", color: P.ink, opacity: c.tarde ? 0.4 : c.gana > 0 ? 1 : 0.6 }}
           >
             <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", gap: 8 }}>
-              <span style={{ fontSize: 14, fontWeight: 600, minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{c.nombre}</span>
-              <span style={{ fontSize: 13, fontWeight: 700, color: c.tarde ? P.alert : c.gana > 0 ? P.ok : P.muted, fontFamily: "ui-monospace, monospace", flexShrink: 0 }}>
+              <span style={{ fontSize: T.alto, fontWeight: 600, minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{c.nombre}</span>
+              <span style={{ fontSize: T.base, fontWeight: 700, color: c.tarde ? P.alert : c.gana > 0 ? P.ok : P.muted, fontFamily: MONO, flexShrink: 0 }}>
                 {c.tarde ? "sin margen" : c.gana > 0 ? `gana ${c.gana}′` : "sin ganancia"}
               </span>
             </div>
-            <div style={{ fontSize: 11.5, color: P.muted, marginTop: 2 }}>
+            <div style={{ fontSize: T.aux, color: P.muted, marginTop: 2 }}>
               paso en {c.eta} min ·{" "}
-              <span style={{ color: c.espera > 30 ? P.alert : c.espera > 15 ? P.warn : P.muted, fontWeight: c.espera > 15 ? 700 : 400 }}>
+              <span style={{ color: nivelCol(c.espera, ...UMBRAL.espera), fontWeight: c.espera > 15 ? 700 : 400 }}>
                 {c.espera} min de maniobra
               </span>{" "}
               · reanuda <span style={{ color: c.trasRotar > 0 ? P.warn : P.ok, fontWeight: 600 }}>{retTxt(c.trasRotar)}</span>
             </div>
-            <div style={{ fontSize: 11.5, color: P.muted, marginTop: 1 }}>
+            <div style={{ fontSize: T.aux, color: P.muted, marginTop: 2 }}>
               deja {c.sinServicio} estación{c.sinServicio !== 1 ? "es" : ""} sin servicio hasta {c.cabecera}
             </div>
           </button>
         ))}
 
-        <button onClick={close} style={{ width: "100%", background: P.sunken, border: `1px solid ${P.rule}`, borderRadius: 9, padding: 12, fontFamily: "inherit", fontWeight: 600, fontSize: 14, cursor: "pointer", color: P.ink, marginTop: 4 }}>
+        <button onClick={close} style={{ width: "100%", background: P.sunken, border: `1px solid ${P.rule}`, borderRadius: R.normal, padding: 12, fontFamily: "inherit", fontWeight: 600, fontSize: T.alto, cursor: "pointer", color: P.ink, marginTop: 4 }}>
           Cerrar
         </button>
       </div>
@@ -5573,13 +5796,13 @@ function SelectorApartado({ g, setG, i, close }) {
   const v = vecinos(g, t);
   const ests = estacionesParaApartar(g, t);
   return (
-    <div onClick={close} style={{ position: "fixed", inset: 0, background: "rgba(10,14,17,.45)", display: "flex", alignItems: "flex-end", justifyContent: "center", zIndex: 62 }}>
-      <div onClick={(e) => e.stopPropagation()} style={{ background: P.surface, width: "100%", maxWidth: 540, maxHeight: "78vh", overflowY: "auto", borderRadius: "16px 16px 0 0", padding: 16 }}>
+    <div onClick={close} style={{ position: "fixed", inset: 0, background: "rgba(10,14,17,.45)", animation: "cgo-fondo .18s ease-out", display: "flex", alignItems: "flex-end", justifyContent: "center", zIndex: 62 }}>
+      <div onClick={(e) => e.stopPropagation()} style={{ background: P.surface, width: "100%", maxWidth: 540, maxHeight: "78vh", overflowY: "auto", borderRadius: `${R.grande + 2}px ${R.grande + 2}px 0 0`, padding: 16, boxShadow: SOMBRA.hoja, animation: "cgo-hoja .22s ease-out" }}>
         <div style={ST.eyebrow}>Adelantamiento</div>
-        <div style={{ fontSize: 19, fontWeight: 700, letterSpacing: -0.4, margin: "3px 0 4px" }}>
+        <div style={{ fontSize: T.titulo, fontWeight: 700, letterSpacing: -0.4, margin: "3px 0 4px" }}>
           Apartar el {numeroTren(t, g.reloj)}
         </div>
-        <div style={{ fontSize: 13, color: P.muted, marginBottom: 14, lineHeight: 1.45 }}>
+        <div style={{ fontSize: T.base, color: P.muted, marginBottom: 16, lineHeight: 1.45 }}>
           {v.detras
             ? `El ${numeroTren(v.detras, g.reloj)} viene ${Math.round(v.dDetras)} min por detrás${
                 v.dDetras > 12 ? " y de momento no le alcanza" : " y no puede adelantar en vía"
@@ -5587,7 +5810,7 @@ function SelectorApartado({ g, setG, i, close }) {
             : "Ahora mismo no hay ningún tren por detrás en este sentido: apartarse solo serviría para perder tiempo."}
         </div>
         {ests.length === 0 && (
-          <div style={{ fontSize: 13, color: P.alert, background: P.sunken, borderRadius: 8, padding: "10px 12px", marginBottom: 10 }}>
+          <div style={{ fontSize: T.base, color: P.alert, background: P.sunken, borderRadius: R.normal, padding: "10px 12px", marginBottom: 12 }}>
             No hay estaciones con vía desviada libre por delante.
           </div>
         )}
@@ -5598,19 +5821,19 @@ function SelectorApartado({ g, setG, i, close }) {
               setG((p) => aplicar(clonar(p), { apartarPaso: { i, idx: e.idx, quien: v.detras ? v.detras.i : null } }));
               close();
             }}
-            style={{ display: "block", width: "100%", textAlign: "left", background: P.surface, border: `1px solid ${P.rule}`, borderRadius: 9, padding: "11px 12px", marginBottom: 6, fontFamily: "inherit", cursor: "pointer", color: P.ink }}
+            style={{ display: "block", width: "100%", textAlign: "left", background: P.surface, border: `1px solid ${P.rule}`, borderRadius: R.normal, padding: "11px 12px", marginBottom: 8, fontFamily: "inherit", cursor: "pointer", color: P.ink }}
           >
             <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", gap: 8 }}>
-              <span style={{ fontSize: 14, fontWeight: 600 }}>{e.nombre}</span>
-              <span style={{ fontSize: 12.5, color: P.muted, fontFamily: "ui-monospace, monospace" }}>llega en {e.eta} min</span>
+              <span style={{ fontSize: T.alto, fontWeight: 600 }}>{e.nombre}</span>
+              <span style={{ fontSize: T.base, color: P.muted, fontFamily: MONO }}>llega en {e.eta} min</span>
             </div>
-            <div style={{ fontSize: 11.5, color: P.muted, marginTop: 2 }}>
+            <div style={{ fontSize: T.aux, color: P.muted, marginTop: 2 }}>
               {e.libres.length > 1 ? `${e.libres.length} vías libres: ${e.libres.join(", ")}` : e.via} · +2 min de entrada y +2 de salida, más la espera
               hasta que pase el de atrás
             </div>
           </button>
         ))}
-        <button onClick={close} style={{ width: "100%", background: P.sunken, border: `1px solid ${P.rule}`, borderRadius: 9, padding: 12, fontFamily: "inherit", fontWeight: 600, fontSize: 14, cursor: "pointer", color: P.ink, marginTop: 4 }}>
+        <button onClick={close} style={{ width: "100%", background: P.sunken, border: `1px solid ${P.rule}`, borderRadius: R.normal, padding: 12, fontFamily: "inherit", fontWeight: 600, fontSize: T.alto, cursor: "pointer", color: P.ink, marginTop: 4 }}>
           Cerrar
         </button>
       </div>
@@ -5640,20 +5863,20 @@ function Personal({ g }) {
   ];
   return (
     <div>
-      <div style={{ ...ST.card, padding: "9px 11px", marginBottom: 12, fontSize: 12, color: P.muted, lineHeight: 1.45 }}>
-        <div style={{ display: "flex", alignItems: "center", gap: 6, flexWrap: "wrap" }}>
+      <div style={{ ...ST.card, padding: "9px 11px", marginBottom: 12, fontSize: T.aux, color: P.muted, lineHeight: 1.45 }}>
+        <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
           <button
             onClick={() => verInfo("relevos")}
             style={{
               background: info === "relevos" ? P.ink : P.surface,
-              color: info === "relevos" ? "#fff" : P.ink,
+              color: info === "relevos" ? P.blanco : P.ink,
               border: `1px solid ${info === "relevos" ? P.ink : P.rule}`,
               borderRadius: "50%",
               width: 24,
               height: 24,
-              fontSize: 12,
+              fontSize: T.aux,
               fontWeight: 700,
-              fontFamily: "'Archivo', system-ui, sans-serif",
+              fontFamily: FUENTE,
               cursor: "pointer",
               lineHeight: 1,
               flexShrink: 0,
@@ -5662,11 +5885,11 @@ function Personal({ g }) {
           >
             i
           </button>
-          <span style={{ fontSize: 11.5 }}>Relevos y jornada</span>
+          <span style={{ fontSize: T.aux }}>Relevos y jornada</span>
         </div>
 
         {info === "relevos" && (
-          <div style={{ marginTop: 8, background: P.sunken, borderRadius: 8, padding: "10px 12px", lineHeight: 1.5 }}>
+          <div style={{ marginTop: 8, background: P.sunken, borderRadius: R.normal, padding: "10px 12px", lineHeight: 1.5 }}>
             La mayor parte de los maquinistas son de la cabecera de <strong style={{ color: P.ink }}>Chamartín</strong> y ahí se realizan prácticamente
             todos los relevos. Sin embargo, también habrá relevos de forma puntual en las cabeceras de Alcalá y Príncipe Pío.
             <div style={{ marginTop: 8 }}>
@@ -5676,20 +5899,20 @@ function Personal({ g }) {
           </div>
         )}
 
-        <div style={{ marginTop: 8, paddingTop: 8, borderTop: `1px solid ${P.sunken}`, display: "flex", alignItems: "center", gap: 6, flexWrap: "wrap" }}>
+        <div style={{ marginTop: 8, paddingTop: 8, borderTop: `1px solid ${P.sunken}`, display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
           {Object.keys(INFO_ATRIB).map((k) => (
             <button
               key={k}
               onClick={() => verInfo(k)}
               style={{
                 background: info === k ? P.ink : P.surface,
-                color: info === k ? "#fff" : P.ink,
+                color: info === k ? P.blanco : P.ink,
                 border: `1px solid ${info === k ? P.ink : P.rule}`,
-                borderRadius: 20,
+                borderRadius: R.pastilla,
                 padding: "3px 10px",
-                fontSize: 11,
+                fontSize: T.aux,
                 fontWeight: 700,
-                fontFamily: "ui-monospace, monospace",
+                fontFamily: MONO,
                 cursor: "pointer",
               }}
             >
@@ -5700,12 +5923,12 @@ function Personal({ g }) {
             onClick={() => verInfo("todos")}
             style={{
               background: info === "todos" ? P.ink : P.surface,
-              color: info === "todos" ? "#fff" : P.ink,
+              color: info === "todos" ? P.blanco : P.ink,
               border: `1px solid ${info === "todos" ? P.ink : P.rule}`,
               borderRadius: "50%",
               width: 24,
               height: 24,
-              fontSize: 12,
+              fontSize: T.aux,
               fontWeight: 700,
               fontFamily: "inherit",
               cursor: "pointer",
@@ -5715,11 +5938,11 @@ function Personal({ g }) {
           >
             i
           </button>
-          <span style={{ fontSize: 11 }}>La pastilla junto al nombre es la media de los tres.</span>
+          <span style={{ fontSize: T.aux }}>La pastilla junto al nombre es la media de los tres.</span>
         </div>
         {/* solo se pintan claves de atributo: "relevos" tiene su propio panel */}
         {(info === "todos" || INFO_ATRIB[info]) && (
-          <div style={{ marginTop: 8, background: P.sunken, borderRadius: 8, padding: "9px 11px" }}>
+          <div style={{ marginTop: 8, background: P.sunken, borderRadius: R.normal, padding: "9px 11px" }}>
             {(info === "todos" ? Object.keys(INFO_ATRIB) : [info])
               .filter((k) => INFO_ATRIB[k])
               .map((k) => (
@@ -5732,19 +5955,19 @@ function Personal({ g }) {
       </div>
       {grupos.map(([titulo, lista]) => (
         <div key={titulo} style={{ marginBottom: 12 }}>
-          <div style={{ fontSize: 11, letterSpacing: 1.4, textTransform: "uppercase", color: P.muted, fontWeight: 700, marginBottom: 6 }}>
+          <div style={{ fontSize: T.aux, letterSpacing: 1.4, textTransform: "uppercase", color: P.muted, fontWeight: 700, marginBottom: 8 }}>
             {titulo} · {lista.length}
           </div>
-          {lista.length === 0 && <div style={{ fontSize: 12.5, color: P.muted, paddingLeft: 2 }}>—</div>}
+          {lista.length === 0 && <div style={{ fontSize: T.base, color: P.muted, paddingLeft: 2 }}>—</div>}
           {lista.map((m) => (
-            <div key={m.id} style={{ ...ST.card, padding: "9px 11px", marginBottom: 5 }}>
+            <div key={m.id} style={{ ...ST.card, padding: "9px 11px", marginBottom: 4 }}>
               <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline" }}>
-                <span style={{ fontSize: 13.5, fontWeight: 600, display: "flex", alignItems: "center", gap: 7 }}>
+                <span style={{ fontSize: T.base, fontWeight: 600, display: "flex", alignItems: "center", gap: 8 }}>
                   {m.nombre}
                   <Media m={m} />
-                  {m.baja && <span style={{ color: P.alert, fontSize: 11 }}>indispuesto</span>}
+                  {m.baja && <span style={{ color: P.alert, fontSize: T.aux }}>indispuesto</span>}
                 </span>
-                <span style={{ fontSize: 11.5, color: P.muted, fontFamily: "ui-monospace, monospace" }}>
+                <span style={{ fontSize: T.aux, color: P.muted, fontFamily: MONO }}>
                   {m.estado === "conduciendo" || m.estado === "acompanante"
                     ? `circ. ${m.tren}`
                     : m.estado === "descanso"
@@ -5754,11 +5977,11 @@ function Personal({ g }) {
                     : ""}
                 </span>
               </div>
-              <div style={{ display: "flex", alignItems: "center", gap: 7, marginTop: 5 }}>
-                <div style={{ flex: 1, height: 4, background: P.sunken, borderRadius: 2, overflow: "hidden" }}>
-                  <div style={{ width: `${Math.min(100, (m.jornada / JORNADA_MAX) * 100)}%`, height: "100%", background: m.jornada > JORNADA_MAX * 0.85 ? P.alert : m.jornada > JORNADA_MAX * 0.6 ? P.warn : P.ok }} />
+              <div style={{ display: "flex", alignItems: "center", gap: 8, marginTop: 4 }}>
+                <div style={{ flex: 1, height: 4, background: P.sunken, borderRadius: R.hilo, overflow: "hidden" }}>
+                  <div style={{ width: `${Math.min(100, (m.jornada / JORNADA_MAX) * 100)}%`, height: "100%", background: nivelCol(m.jornada / JORNADA_MAX, ...UMBRAL.jornada) }} />
                 </div>
-                <span style={{ fontSize: 11, color: P.muted, fontFamily: "ui-monospace, monospace" }}>{dur(m.jornada)}</span>
+                <span style={{ fontSize: T.aux, color: P.muted, fontFamily: MONO }}>{dur(m.jornada)}</span>
               </div>
               <Atributos m={m} onInfo={verInfo} />
             </div>
@@ -5772,12 +5995,28 @@ function Personal({ g }) {
 /* ── mapa ───────────────────────────────────────────────────── */
 
 
-function Mapa({ g, detalle, setDetalle, setEstSel, setTrenSel, setVolverA }) {
+function Mapa({ g, detalle, setDetalle, setEstSel, setTrenSel, setVolverA, foco, setFoco }) {
+  // el realce se mantiene hasta que se toca el mapa, no se apaga solo
+  const quitarFoco = () => foco && setFoco(null);
+  /* Al llegar desde la flecha de un tren se centra la vista en su posición.
+     El aviso se borra en cuanto se ha usado, para no volver a arrastrar la
+     pantalla en cada minuto de simulación.                              */
+  useEffect(() => {
+    if (!foco) return;
+    const el = document.getElementById(`mapa-tren-${foco}`);
+    if (el) el.scrollIntoView({ block: "center", behavior: "smooth" });
+  }, [foco]);
+
   const ALTO = detalle ? 50 : 30;
   const BANDA = 30;
   const GUT = 82; // canalón de vía: deja sitio al punto de retraso
   const VIA_A = 24;
   const VIA_B = 44;
+  /* Un solo grosor para todo lo que es línea: las dos vías, el contorno de
+     las estaciones y la barra de los apeaderos. Antes convivían cinco valores
+     distintos (3, 4, 5, 5,5 y 7) para representar lo mismo, y el esquema se
+     veía desigual.                                                       */
+  const TRAZO = 4;
 
   const ys = [];
   const bandas = [];
@@ -5800,14 +6039,15 @@ function Mapa({ g, detalle, setDetalle, setEstSel, setTrenSel, setVolverA }) {
   const activos = g.trenes.filter((t) => t.estado !== "suprimido").map((t) => ({ ...t, s: situacionVis(t, g) }));
 
   return (
-    <div>
+    <div onPointerDown={quitarFoco}>
       <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 8 }}>
-        <div style={{ display: "flex", gap: 11, flex: 1, fontSize: 11, color: P.muted, flexWrap: "wrap" }}>
+        <div style={{ display: "flex", gap: 12, flex: 1, fontSize: T.aux, color: P.muted, flexWrap: "wrap" }}>
           <span style={{ display: "flex", alignItems: "center", gap: 4 }}>
-            <span style={{ width: 16, height: 9, border: `2.5px solid ${ROJO}`, borderRadius: 5, display: "inline-block", background: P.surface }} /> estación
+            {/* los símbolos de la leyenda usan el mismo trazo que el esquema */}
+            <span style={{ width: 18, height: 10, border: `3px solid ${ROJO}`, borderRadius: R.pastilla, display: "inline-block", background: P.surface, boxSizing: "border-box" }} /> estación
           </span>
           <span style={{ display: "flex", alignItems: "center", gap: 4 }}>
-            <span style={{ width: 14, height: 3, background: ROJO, borderRadius: 1, display: "inline-block" }} /> apeadero
+            <span style={{ width: 18, height: 3, background: ROJO, borderRadius: R.hilo, display: "inline-block" }} /> apeadero
           </span>
           <span style={{ display: "flex", alignItems: "center", gap: 4 }}>
             <span style={{ width: 10, height: 13, background: ROJO, clipPath: CLIP_BAJA, display: "inline-block" }} /> Alcalá
@@ -5817,7 +6057,7 @@ function Mapa({ g, detalle, setDetalle, setEstSel, setTrenSel, setVolverA }) {
           </span>
           <span style={{ display: "flex", alignItems: "center", gap: 4 }}>⇄ vía desviada</span>
           <span style={{ display: "flex", alignItems: "center", gap: 4 }}>
-            <span style={{ width: 4, height: 12, background: `repeating-linear-gradient(180deg, ${P.surface} 0 3px, ${P.warn} 3px 6px)`, display: "inline-block" }} /> vía única
+            <span style={{ width: 3, height: 12, background: `repeating-linear-gradient(180deg, ${P.surface} 0 3px, ${P.warn} 3px 7px)`, display: "inline-block" }} /> vía única
           </span>
           <span style={{ display: "flex", alignItems: "center", gap: 4 }}>
             <span style={{ width: 8, height: 8, borderRadius: "50%", background: P.ok, display: "inline-block" }} />
@@ -5825,15 +6065,41 @@ function Mapa({ g, detalle, setDetalle, setEstSel, setTrenSel, setVolverA }) {
             <span style={{ width: 8, height: 8, borderRadius: "50%", background: P.alert, display: "inline-block" }} /> retraso
           </span>
         </div>
-        <button onClick={() => setDetalle(!detalle)} style={{ background: P.surface, border: `1px solid ${P.rule}`, borderRadius: 7, padding: "6px 10px", fontFamily: "inherit", fontSize: 11.5, fontWeight: 600, color: P.ink, cursor: "pointer", flexShrink: 0 }}>
+        <button onClick={() => setDetalle(!detalle)} style={{ background: P.surface, border: `1px solid ${P.rule}`, borderRadius: R.normal, padding: "6px 10px", fontFamily: "inherit", fontSize: T.aux, fontWeight: 600, color: P.ink, cursor: "pointer", flexShrink: 0 }}>
           {detalle ? "Ocultar correspondencias" : "Mostrar correspondencias"}
         </button>
       </div>
 
       <div style={{ ...ST.card, position: "relative", height: H, overflow: "hidden" }}>
-        <div style={{ position: "absolute", left: 12, top: ys[9], width: 56, height: ys[12] - ys[9], background: P.sunken, borderRadius: 6 }} />
+        {/* Tramo soterrado del túnel de la Risa, de Chamartín a Atocha. Los
+            índices iban escritos a mano y al añadir los puestos de circulación
+            pasaron a señalar de Ramón y Cajal a Recoletos. Se centra sobre las
+            dos vías en vez de ir a la izquierda del todo.                  */}
+        {(() => {
+          const a = ESTACIONES.findIndex((e) => e.sot);
+          const b = N - 1 - [...ESTACIONES].reverse().findIndex((e) => e.sot);
+          const ini = Math.max(0, a - 1); // arranca en la estación anterior: Chamartín
+          const ancho = VIA_B + TRAZO - VIA_A + 16; // el trazado más un margen
+          return (
+            <div
+              style={{
+                position: "absolute",
+                left: VIA_A + (VIA_B + TRAZO - VIA_A) / 2 - ancho / 2,
+                top: ys[ini],
+                width: ancho,
+                height: ys[b] - ys[ini],
+                background: P.sunken,
+                // contorno tenue: se lee como recinto y no como mancha
+                border: `1px solid ${P.rule}`,
+                borderRadius: R.normal,
+                boxSizing: "border-box",
+              }}
+            />
+          );
+        })()}
+        {/* las dos vías, del mismo color: el sentido lo marcan los trenes */}
         {[VIA_A, VIA_B].map((x) => (
-          <div key={x} style={{ position: "absolute", left: x, top: ys[0], width: 3.5, height: ys[N - 1] - ys[0], background: ROJO, borderRadius: 2 }} />
+          <div key={x} style={{ position: "absolute", left: x, top: ys[0], width: TRAZO, height: ys[N - 1] - ys[0], background: ROJO, borderRadius: R.hilo }} />
         ))}
 
         {/* tramos en vía única: la vía cortada se dibuja interrumpida */}
@@ -5844,12 +6110,15 @@ function Mapa({ g, detalle, setDetalle, setEstSel, setTrenSel, setVolverA }) {
               key={`vu${k}`}
               style={{
                 position: "absolute",
-                left: x - 1,
+                left: x,
                 top: ys[rest.tramo.a],
-                width: 5.5,
+                width: TRAZO,
                 height: ys[rest.tramo.b] - ys[rest.tramo.a],
-                background: `repeating-linear-gradient(180deg, ${P.surface} 0 5px, ${P.warn} 5px 9px)`,
-                borderRadius: 2,
+                background: `repeating-linear-gradient(180deg, ${P.surface} 0 4px, ${P.warn} 4px 10px)`,
+                borderRadius: R.hilo,
+                // por encima del trazado, para que se vea que corta la vía
+                zIndex: 2,
+                boxShadow: `0 0 0 1px ${P.surface}`,
               }}
             />
           );
@@ -5857,38 +6126,57 @@ function Mapa({ g, detalle, setDetalle, setEstSel, setTrenSel, setVolverA }) {
 
         {bandas.map((b) => (
           <div key={b.n} style={{ position: "absolute", left: GUT, top: b.y, right: 0, height: BANDA, paddingRight: 12, display: "flex", alignItems: "center" }}>
-            <div style={{ display: "flex", alignItems: "center", gap: 7, width: "100%" }}>
-              <span style={{ fontSize: 9.5, fontWeight: 700, letterSpacing: 1.1, textTransform: "uppercase", whiteSpace: "nowrap" }}>{b.n}</span>
+            <div style={{ display: "flex", alignItems: "center", gap: 8, width: "100%" }}>
+              <span style={{ fontSize: T.micro, fontWeight: 700, letterSpacing: 1.1, textTransform: "uppercase", whiteSpace: "nowrap" }}>{b.n}</span>
               <span style={{ height: 1, background: P.rule, flex: 1 }} />
-              <span style={{ fontSize: 9.5, color: P.muted, whiteSpace: "nowrap" }}>{b.d}</span>
+              <span style={{ fontSize: T.micro, color: P.muted, whiteSpace: "nowrap" }}>{b.d}</span>
             </div>
           </div>
         ))}
 
         {ESTACIONES.map((e, i) => {
-          const grande = !!e.cab || !!e.term;
+          /* Las tres marcas miden exactamente lo que ocupa el trazado, de
+             borde a borde de las dos vías, y se diferencian por la altura y
+             el relleno. Antes tenían anchos sueltos y sobresalían del propio
+             trazado, que es lo que hacía que el esquema se viera torcido. */
+          const cab = !!e.cab || !!e.term;
           const ap = e.tipo === "ap";
-          const w = ap ? 26 : grande ? 38 : 32;
-          const hh = ap ? 4 : grande ? 16 : 13;
-          const bw = grande ? 4 : 3;
-          const cx = (VIA_A + VIA_B) / 2 + 1.75;
+          const w = VIA_B + TRAZO - VIA_A; // de borde a borde de las dos vías
+          const hh = ap ? TRAZO : cab ? 20 : 14;
+          const cx = VIA_A + w / 2;
           const libres = e.cab ? reservasEn(g, e.cab).length : 0;
           const rest = g.restricciones.find((x) => x.idx === i);
           const col = rest ? P.warn : ROJO;
           return (
             <div key={e.n}>
-              <div style={{ position: "absolute", left: cx - w / 2, top: ys[i] - hh / 2, width: w, height: hh, background: ap ? col : P.surface, border: ap ? "none" : `${bw}px solid ${col}`, borderRadius: ap ? 2 : 9, boxSizing: "border-box" }} />
+              <div
+                style={{
+                  position: "absolute",
+                  left: cx - w / 2,
+                  top: ys[i] - hh / 2,
+                  width: w,
+                  height: hh,
+                  // el apeadero es una barra maciza; el resto, un anillo hueco
+                  background: ap ? col : P.surface,
+                  border: ap ? "none" : `${TRAZO}px solid ${col}`,
+                  borderRadius: ap ? R.hilo : R.pastilla,
+                  boxSizing: "border-box",
+                }}
+              />
               <button
                 onClick={() => setEstSel(i)}
                 style={{ all: "unset", cursor: "pointer", position: "absolute", left: GUT, top: ys[i] - ALTO / 2, height: ALTO, right: 0, paddingRight: 12, display: "flex", flexDirection: "column", justifyContent: "center", gap: 4, boxSizing: "border-box" }}
               >
-                <div style={{ display: "flex", alignItems: "center", gap: 6, minWidth: 0 }}>
+                <div style={{ display: "flex", alignItems: "center", gap: 8, minWidth: 0 }}>
                   <span
                     style={{
-                      // mismo cuerpo y peso que el resto; solo cambia el color,
-                      // para distinguir las que no prestan servicio comercial
-                      fontSize: grande ? 13.5 : ap ? 12.5 : 13,
-                      fontWeight: grande ? 700 : ap ? 400 : 600,
+                      /* Jerarquía también en el rótulo: la cabecera manda, la
+                         estación es el cuerpo del listado y el apeadero queda
+                         en segundo plano. Los puestos sin servicio comercial
+                         se distinguen por la cursiva.                    */
+                      fontSize: cab ? T.alto : T.base,
+                      fontWeight: cab ? 700 : 600,
+                      letterSpacing: cab ? -0.2 : 0,
                       color: P.ink,
                       fontStyle: e.puesto ? "italic" : "normal",
                       whiteSpace: "nowrap",
@@ -5899,21 +6187,21 @@ function Mapa({ g, detalle, setDetalle, setEstSel, setTrenSel, setVolverA }) {
                     {e.n}
                   </span>
                   {rest && (
-                    <span style={{ fontSize: 9, fontWeight: 700, color: "#fff", background: P.warn, borderRadius: 3, padding: "1px 5px", flexShrink: 0, fontFamily: "ui-monospace, monospace" }}>
+                    <span style={{ fontSize: T.micro, fontWeight: 700, color: P.blanco, background: P.warn, borderRadius: R.menudo, padding: "1px 5px", flexShrink: 0, fontFamily: MONO }}>
                       +{rest.m}′{rest.dir === "alcala" ? " ▼" : rest.dir === "pio" ? " ▲" : ""}
                     </span>
                   )}
                   {e.rot && (
-                    <span style={{ fontSize: 9, fontWeight: 700, color: P.muted, border: `1px solid ${P.rule}`, borderRadius: 3, padding: "0 4px", flexShrink: 0 }} title="tiene vía desviada: permite rotar o apartar">
+                    <span style={{ fontSize: T.micro, fontWeight: 700, color: P.muted, border: `1px solid ${P.rule}`, borderRadius: R.menudo, padding: "0 4px", flexShrink: 0 }} title="tiene vía desviada: permite rotar o apartar">
                       ⇄
                     </span>
                   )}
                   {e.cab && (
-                    <span style={{ fontSize: 9, fontWeight: 700, color: "#fff", background: libres ? P.ink : P.alert, borderRadius: 3, padding: "1px 5px", fontFamily: "ui-monospace, monospace", flexShrink: 0 }}>●{libres}</span>
+                    <span style={{ fontSize: T.micro, fontWeight: 700, color: P.blanco, background: libres ? P.ink : P.alert, borderRadius: R.menudo, padding: "1px 5px", fontFamily: MONO, flexShrink: 0 }}>●{libres}</span>
                   )}
                 </div>
                 {detalle && (
-                  <div style={{ display: "flex", gap: 3, whiteSpace: "nowrap", overflow: "hidden" }}>
+                  <div style={{ display: "flex", gap: 4, whiteSpace: "nowrap", overflow: "hidden" }}>
                     {e.c.map((l) => <Enlace key={l} txt={l} bg={LIN[l]} />)}
                     {e.metro && <Enlace txt="M" bg={METRO} />}
                     {e.ml && <Enlace txt="ML" bg={ML} />}
@@ -5946,25 +6234,26 @@ function Mapa({ g, detalle, setDetalle, setEstSel, setTrenSel, setVolverA }) {
                 cursor: "pointer",
                 position: "absolute",
                 top: yDe(t.s.idx) - 11,
-                left: maniobrando ? (VIA_A + VIA_B) / 2 - 6 : enViaBaja ? VIA_A - 6.5 : VIA_B - 6.5,
+                left: maniobrando ? VIA_A + (VIA_B + TRAZO - VIA_A) / 2 - 6 : (enViaBaja ? VIA_A : VIA_B) + TRAZO / 2 - 6,
                 width: 18,
                 height: 22,
                 // el material en vacío se distingue en negro
                 background: maniobrando || quieto ? P.muted : t.esVacio ? P.ink : ROJO,
                 clipPath: maniobrando ? "none" : baja ? CLIP_BAJA : CLIP_SUBE,
                 borderRadius: maniobrando ? 4 : 3,
-                color: "#fff",
-                fontSize: 10,
+                color: P.blanco,
+                fontSize: T.menor,
                 fontWeight: 700,
-                fontFamily: "ui-monospace, monospace",
+                fontFamily: MONO,
                 display: "flex",
                 alignItems: "center",
                 justifyContent: "center",
                 paddingBottom: !maniobrando && baja ? 5 : 0,
                 paddingTop: !maniobrando && !baja ? 5 : 0,
-                filter: "drop-shadow(0 1px 2px rgba(0,0,0,.35))",
+                // el tren es lo que se mira: va por encima de vías y paradas
+                filter: "drop-shadow(0 2px 3px rgba(10,14,17,.30))",
                 transition: "top .12s linear",
-                zIndex: 3,
+                zIndex: 5,
               }}
             >
               {numCorto(t, g.reloj)}
@@ -5979,7 +6268,7 @@ function Mapa({ g, detalle, setDetalle, setEstSel, setTrenSel, setVolverA }) {
           // la flecha conserva el sentido real; solo cambia la vía que ocupa
           const baja = t.s.dir === "alcala";
           const enViaBaja = contraria ? !baja : baja;
-          const xTren = maniobrando ? (VIA_A + VIA_B) / 2 - 6 : enViaBaja ? VIA_A - 6.5 : VIA_B - 6.5;
+          const xTren = maniobrando ? VIA_A + (VIA_B + TRAZO - VIA_A) / 2 - 6 : (enViaBaja ? VIA_A : VIA_B) + TRAZO / 2 - 6;
           // sentido Alcalá a la izquierda de la flecha; sentido Pío a la derecha
           const x = enViaBaja ? xTren - 12 : xTren + 19;
           // la punta de la flecha desplaza el número 2,5 px: el círculo se
@@ -5988,6 +6277,7 @@ function Mapa({ g, detalle, setDetalle, setEstSel, setTrenSel, setVolverA }) {
           return (
             <div
               key={`r${t.i}`}
+              id={`mapa-tren-${t.i}`}
               onClick={() => {
                 setVolverA(null);
                 setTrenSel(t.i);
@@ -6001,11 +6291,12 @@ function Mapa({ g, detalle, setDetalle, setEstSel, setTrenSel, setVolverA }) {
                 height: 8,
                 borderRadius: "50%",
                 background: colRetraso(retrasoEfectivo(t)),
-                border: "1.5px solid #fff",
+                // realce mientras dura el aviso, para localizarlo de un vistazo
+                border: foco === t.i ? `2.5px solid ${P.ink}` : "1.5px solid #fff",
                 boxSizing: "content-box",
                 cursor: "pointer",
                 transition: "top .12s linear",
-                zIndex: 4,
+                zIndex: 6,
               }}
             />
           );
@@ -6016,6 +6307,7 @@ function Mapa({ g, detalle, setDetalle, setEstSel, setTrenSel, setVolverA }) {
 }
 
 function PerfilEstacion({ g, i, close, verTren, moverVacio }) {
+  const arrastre = useCerrarArrastrando(close);
   const e = ESTACIONES[i];
   const apartado = g.apartado[i] || [];
   const libres = viasLibres(g, i);
@@ -6028,14 +6320,19 @@ function PerfilEstacion({ g, i, close, verTren, moverVacio }) {
   ];
 
   return (
-    <div onClick={close} style={{ position: "fixed", inset: 0, background: "rgba(10,14,17,.45)", display: "flex", alignItems: "flex-end", justifyContent: "center", zIndex: 65 }}>
-      <div onClick={(ev) => ev.stopPropagation()} style={{ background: P.surface, width: "100%", maxWidth: 540, maxHeight: "84vh", overflowY: "auto", borderRadius: "16px 16px 0 0", padding: 16 }}>
-        <div style={{ display: "flex", alignItems: "center", gap: 7, marginBottom: 2 }}>
+    <div onClick={close} style={{ position: "fixed", inset: 0, background: "rgba(10,14,17,.45)", animation: "cgo-fondo .18s ease-out", display: "flex", alignItems: "flex-end", justifyContent: "center", zIndex: 65 }}>
+      <div
+        onClick={(ev) => ev.stopPropagation()}
+        {...arrastre}
+        style={{ background: P.surface, width: "100%", maxWidth: 540, maxHeight: "84vh", overflowY: "auto", borderRadius: `${R.grande + 2}px ${R.grande + 2}px 0 0`, padding: 16, boxShadow: SOMBRA.hoja, animation: "cgo-hoja .22s ease-out", ...arrastre.style }}
+      >
+        <Asa />
+        <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 2 }}>
           <span style={{ ...ST.eyebrow }}>{e.puesto ? "Estación sin servicio comercial" : e.tipo === "est" ? "Estación" : "Apeadero"}</span>
-          {e.rot && <span style={{ fontSize: 9, fontWeight: 700, color: P.muted, border: `1px solid ${P.rule}`, borderRadius: 3, padding: "0 4px" }}>⇄ posibilidad de rotación</span>}
+          {e.rot && <span style={{ fontSize: T.micro, fontWeight: 700, color: P.muted, border: `1px solid ${P.rule}`, borderRadius: R.menudo, padding: "0 4px" }}>⇄ posibilidad de rotación</span>}
         </div>
-        <div style={{ fontSize: 23, fontWeight: 700, letterSpacing: -0.6, lineHeight: 1.1 }}>{e.n}</div>
-        <div style={{ display: "flex", gap: 3, margin: "7px 0 14px", flexWrap: "wrap" }}>
+        <div style={{ fontSize: T.cabecera, fontWeight: 700, letterSpacing: -0.6, lineHeight: 1.1 }}>{e.n}</div>
+        <div style={{ display: "flex", gap: 4, margin: "7px 0 14px", flexWrap: "wrap" }}>
           <Enlace txt={LINEA} bg={LIN[LINEA]} />
           {e.c.map((l) => <Enlace key={l} txt={l} bg={LIN[l]} />)}
           {e.metro && <Enlace txt="M" bg={METRO} />}
@@ -6043,10 +6340,10 @@ function PerfilEstacion({ g, i, close, verTren, moverVacio }) {
         </div>
 
         {rest && (
-          <div style={{ background: P.sunken, border: `1px solid ${P.warn}`, borderRadius: 9, padding: "9px 11px", marginBottom: 14, fontSize: 12.5, lineHeight: 1.45 }}>
+          <div style={{ background: P.sunken, border: `1px solid ${P.warn}`, borderRadius: R.normal, padding: "9px 11px", marginBottom: 16, fontSize: T.base, lineHeight: 1.45 }}>
             <strong>{rest.txt}</strong> · hasta las {hhmm(rest.hasta)}
             {rest.tramo && (
-              <div style={{ marginTop: 3 }}>
+              <div style={{ marginTop: 4 }}>
                 Vía única entre <strong>{ESTACIONES[rest.tramo.a].n}</strong> y <strong>{ESTACIONES[rest.tramo.b].n}</strong>. Los trenes de sentido{" "}
                 {rest.dir === "alcala" ? "Alcalá" : "Príncipe Pío"} circulan por la contraria y se cruzan en esas estaciones.
               </div>
@@ -6061,23 +6358,23 @@ function PerfilEstacion({ g, i, close, verTren, moverVacio }) {
             const bloqueado = (dir === "alcala" && i === N - 1) || (dir === "pio" && i === 0);
             if (bloqueado) return null;
             return (
-              <div key={nom} style={{ background: fondoFila(k), padding: "8px 10px", margin: "0 -12px", borderRadius: 6 }}>
+              <div key={nom} style={{ background: fondoFila(k), padding: "8px 10px", margin: "0 -12px", borderRadius: R.normal }}>
                 <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 8 }}>
-                  <span style={{ display: "flex", alignItems: "center", gap: 7, minWidth: 0 }}>
+                  <span style={{ display: "flex", alignItems: "center", gap: 8, minWidth: 0 }}>
                     <Enlace txt={LINEA} bg={LIN[LINEA]} />
-                    <span style={{ fontSize: 13, fontWeight: 600, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{nom}</span>
+                    <span style={{ fontSize: T.base, fontWeight: 600, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{nom}</span>
                   </span>
-                  <span style={{ fontSize: 17, fontWeight: 700, fontFamily: "ui-monospace, monospace", color: n > 400 ? P.alert : n > 180 ? P.warn : P.ink, flexShrink: 0 }}>
+                  <span style={{ fontSize: T.titulo, fontWeight: 700, fontFamily: MONO, color: nivelCol(n, ...UMBRAL.anden), flexShrink: 0 }}>
                     {nf(n)}
                   </span>
                 </div>
-                <div style={{ fontSize: 11.5, color: P.muted, marginTop: 2, fontFamily: "ui-monospace, monospace" }}>
+                <div style={{ fontSize: T.aux, color: P.muted, marginTop: 2, fontFamily: MONO }}>
                   último tren hace {Math.round(paso.desde)} min · próximo en {Math.round(paso.hasta)} min
                 </div>
               </div>
             );
           })}
-          <div style={{ borderTop: `1px solid ${P.sunken}`, paddingTop: 8, marginTop: 4, fontSize: 11.5, color: P.muted, lineHeight: 1.4 }}>
+          <div style={{ borderTop: `1px solid ${P.sunken}`, paddingTop: 8, marginTop: 4, fontSize: T.aux, color: P.muted, lineHeight: 1.4 }}>
             Escala de afluencia {e.esc}/5 · llegan {(VIAJEROS_MIN_100 * intensidad(g.reloj) * pesoOrigen(i, marea(g.reloj)) / ESTACIONES.reduce((n2, _, j) => n2 + pesoOrigen(j, marea(g.reloj)), 0)).toFixed(1)} viajeros por minuto
           </div>
         </Bloque>}
@@ -6088,11 +6385,11 @@ function PerfilEstacion({ g, i, close, verTren, moverVacio }) {
             {viasGenerales(i).map((v, k) => {
               const prox = proximoPaso(g, i, v.dir);
               return (
-                <div key={v.via} style={{ background: fondoFila(k), padding: "8px 10px", margin: "0 -12px", borderRadius: 6 }}>
+                <div key={v.via} style={{ background: fondoFila(k), padding: "8px 10px", margin: "0 -12px", borderRadius: R.normal }}>
                   <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 8 }}>
                     <span style={{ minWidth: 0 }}>
-                      <span style={{ fontSize: 12.5, fontFamily: "ui-monospace, monospace", fontWeight: 700 }}>{v.via}</span>
-                      <span style={{ fontSize: 11, color: P.muted, marginLeft: 7, whiteSpace: "nowrap" }}>
+                      <span style={{ fontSize: T.base, fontFamily: MONO, fontWeight: 700 }}>{v.via}</span>
+                      <span style={{ fontSize: T.aux, color: P.muted, marginLeft: 8, whiteSpace: "nowrap" }}>
                         {v.paridad} · hacia {v.sentido}
                       </span>
                     </span>
@@ -6117,12 +6414,12 @@ function PerfilEstacion({ g, i, close, verTren, moverVacio }) {
         <Bloque titulo={e.paso ? "Vías de paso e inversión" : "Vías desviadas"}>
           {
             estadoViasRot(g, i).map((v, k) => (
-              <div key={v.via} style={{ background: fondoFila(k), padding: "8px 10px", margin: "0 -12px", borderRadius: 6 }}>
+              <div key={v.via} style={{ background: fondoFila(k), padding: "8px 10px", margin: "0 -12px", borderRadius: R.normal }}>
                 <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 8 }}>
                   <span style={{ minWidth: 52, flexShrink: 0 }}>
-                    <span style={{ fontSize: 12.5, fontFamily: "ui-monospace, monospace", fontWeight: 700 }}>{v.via}</span>
+                    <span style={{ fontSize: T.base, fontFamily: MONO, fontWeight: 700 }}>{v.via}</span>
                     {v.pasoDir && (
-                      <span style={{ fontSize: 10, color: P.muted, display: "block" }}>
+                      <span style={{ fontSize: T.menor, color: P.muted, display: "block" }}>
                         {v.pasoDir === "pio" ? "impares" : "pares"}
                       </span>
                     )}
@@ -6139,14 +6436,14 @@ function PerfilEstacion({ g, i, close, verTren, moverVacio }) {
                   ) : v.tipo === "tren" ? (
                     <FilaVia g={g} tren={v.tren} txt={`sale en ${v.sale} min`} col={P.ok} fondo={ROJO} onClick={() => verTren(v.tren.i)} />
                   ) : v.tipo === "material" ? (
-                    <span style={{ fontSize: 12, color: P.warn, fontWeight: 600 }}>material apartado</span>
+                    <span style={{ fontSize: T.aux, color: P.warn, fontWeight: 600 }}>material apartado</span>
                   ) : (
-                    <span style={{ fontSize: 12, color: P.ok, fontWeight: 600 }}>libre</span>
+                    <span style={{ fontSize: T.aux, color: P.ok, fontWeight: 600 }}>libre</span>
                   )}
                 </div>
                 {v.prox && (
-                  <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 8, marginTop: 5, paddingLeft: 52 }}>
-                    <span style={{ fontSize: 11, color: P.muted, flexShrink: 0 }}>siguiente</span>
+                  <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 8, marginTop: 4, paddingLeft: 52 }}>
+                    <span style={{ fontSize: T.aux, color: P.muted, flexShrink: 0 }}>siguiente</span>
                     <FilaVia
                       g={g}
                       tren={v.prox.tren}
@@ -6170,16 +6467,16 @@ function PerfilEstacion({ g, i, close, verTren, moverVacio }) {
                 .map((d) => {
                   const prox = proximoPaso(g, i, d);
                   return prox ? (
-                    <div key={d} style={{ background: fondoFila(e.rotVias.length), padding: "8px 10px", margin: "0 -12px", borderRadius: 6, display: "flex", justifyContent: "space-between", alignItems: "center", gap: 8 }}>
+                    <div key={d} style={{ background: fondoFila(e.rotVias.length), padding: "8px 10px", margin: "0 -12px", borderRadius: R.normal, display: "flex", justifyContent: "space-between", alignItems: "center", gap: 8 }}>
                       <span style={{ minWidth: 52, flexShrink: 0 }}>
-                        <span style={{ fontSize: 11.5, fontWeight: 700 }}>{d === "pio" ? "impares" : "pares"}</span>
-                        <span style={{ fontSize: 10, color: P.muted, display: "block" }}>vía s/n</span>
+                        <span style={{ fontSize: T.aux, fontWeight: 700 }}>{d === "pio" ? "impares" : "pares"}</span>
+                        <span style={{ fontSize: T.menor, color: P.muted, display: "block" }}>vía s/n</span>
                       </span>
                       <FilaVia g={g} tren={prox.t} txt={`pasa en ${Math.round(prox.eta)} min`} col={prox.eta <= 3 ? P.ok : P.muted} fondo={ROJO} onClick={() => verTren(prox.t.i)} />
                     </div>
                   ) : null;
                 })}
-              <div style={{ fontSize: 11, color: P.muted, marginTop: 8, lineHeight: 1.4 }}>
+              <div style={{ fontSize: T.aux, color: P.muted, marginTop: 8, lineHeight: 1.4 }}>
                 Por estas vías los trenes circulan con carácter normal. Las indicadas son las habituales, pero cualquiera de la{" "}
                 {e.rotVias[0].replace("vía ", "")} a la {e.rotVias[e.rotVias.length - 1].replace("vía ", "")} puede emplearse según las necesidades de
                 la circulación.
@@ -6187,7 +6484,7 @@ function PerfilEstacion({ g, i, close, verTren, moverVacio }) {
             </>
           )}
           {(e.rotDir || (e.apartVias || []).some((v) => e.rotVias.includes(v))) && (
-            <div style={{ fontSize: 11, color: P.muted, marginTop: 7, lineHeight: 1.4 }}>
+            <div style={{ fontSize: T.aux, color: P.muted, marginTop: 8, lineHeight: 1.4 }}>
               {e.rotDir ? `Solo se invierte en sentido ${e.rotDir === "pio" ? "Príncipe Pío" : "Alcalá"}. ` : ""}
               {(e.apartVias || []).some((v) => e.rotVias.includes(v)) ? "Vías compartidas con el apartadero." : ""}
             </div>
@@ -6200,29 +6497,29 @@ function PerfilEstacion({ g, i, close, verTren, moverVacio }) {
           {(
             <>
               {apartado.map((x, k) => (
-                <div key={k} style={{ background: fondoFila(k), padding: "8px 10px", margin: "0 -12px", borderRadius: 6 }}>
+                <div key={k} style={{ background: fondoFila(k), padding: "8px 10px", margin: "0 -12px", borderRadius: R.normal }}>
                   <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline" }}>
-                    <span style={{ fontSize: 13, fontWeight: 700, fontFamily: "ui-monospace, monospace" }}>{x.unidades.map((u) => u.id).join(" + ")}</span>
-                    <span style={{ fontSize: 12, color: P.muted }}>{x.via}</span>
+                    <span style={{ fontSize: T.base, fontWeight: 700, fontFamily: MONO }}>{x.unidades.map((u) => u.id).join(" + ")}</span>
+                    <span style={{ fontSize: T.aux, color: P.muted }}>{x.via}</span>
                   </div>
-                  <div style={{ fontSize: 11.5, color: x.averiado ? P.alert : P.muted, marginTop: 2 }}>
+                  <div style={{ fontSize: T.aux, color: x.averiado ? P.alert : P.muted, marginTop: 2 }}>
                     {x.averiado ? "Averiado · fuera de servicio hasta reparación" : `${nf(x.unidades.reduce((n, u) => n + u.plazas, 0))} plazas · disponible`} ·
                     desde las {hhmm(x.desde)}
                   </div>
                   {/* llevar el material a otro sitio con una marcha en vacío */}
                   <button
                     onClick={() => moverVacio(x.via)}
-                    style={{ width: "100%", marginTop: 7, background: P.surface, color: P.ink, border: `1px solid ${P.rule}`, borderRadius: 6, padding: "6px 0", fontFamily: "inherit", fontSize: 11.5, fontWeight: 700, cursor: "pointer" }}
+                    style={{ width: "100%", marginTop: 8, background: P.surface, color: P.ink, border: `1px solid ${P.rule}`, borderRadius: R.normal, padding: "6px 0", fontFamily: "inherit", fontSize: T.aux, fontWeight: 700, cursor: "pointer" }}
                   >
                     Mover en vacío
                   </button>
                 </div>
               ))}
-              {apartado.length === 0 && <div style={{ fontSize: 12.5, color: P.muted, marginBottom: 6 }}>Sin material apartado.</div>}
-              <div style={{ borderTop: `1px solid ${P.sunken}`, paddingTop: 8, marginTop: 4, fontSize: 12.5 }}>
+              {apartado.length === 0 && <div style={{ fontSize: T.base, color: P.muted, marginBottom: 8 }}>Sin material apartado.</div>}
+              <div style={{ borderTop: `1px solid ${P.sunken}`, paddingTop: 8, marginTop: 4, fontSize: T.base }}>
                 <span style={{ color: P.muted }}>{e.apartSeries ? `Solo serie ${e.apartSeries.join("/")} · ` : ""}Vías libres: </span>
                 {libres.length ? (
-                  <span style={{ fontFamily: "ui-monospace, monospace", fontWeight: 600 }}>{libres.join(", ")}</span>
+                  <span style={{ fontFamily: MONO, fontWeight: 600 }}>{libres.join(", ")}</span>
                 ) : (
                   <span style={{ color: P.alert, fontWeight: 600 }}>ninguna</span>
                 )}
@@ -6240,24 +6537,24 @@ function PerfilEstacion({ g, i, close, verTren, moverVacio }) {
               <Kpi k="Nominales por entrar" v={String(nominales.length)} c={P.ink} small />
             </div>
             {reservas.map((m, k) => (
-              <div key={m.id} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", fontSize: 12.5, padding: "6px 10px", margin: "0 -12px", borderRadius: 6, background: fondoFila(k), gap: 8 }}>
-                <span style={{ display: "flex", alignItems: "center", gap: 7 }}>
+              <div key={m.id} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", fontSize: T.base, padding: "6px 10px", margin: "0 -12px", borderRadius: R.normal, background: fondoFila(k), gap: 8 }}>
+                <span style={{ display: "flex", alignItems: "center", gap: 8 }}>
                   {m.nombre}
                   <Media m={m} />
                 </span>
-                <span style={{ color: P.muted, fontFamily: "ui-monospace, monospace" }}>margen {dur(margenDe(m))}</span>
+                <span style={{ color: P.muted, fontFamily: MONO }}>margen {dur(margenDe(m))}</span>
               </div>
             ))}
             {nominales.map((m, k) => (
-              <div key={m.id} style={{ display: "flex", justifyContent: "space-between", fontSize: 12.5, padding: "6px 10px", margin: "0 -12px", borderRadius: 6, background: fondoFila(k + reservas.length), color: P.muted }}>
+              <div key={m.id} style={{ display: "flex", justifyContent: "space-between", fontSize: T.base, padding: "6px 10px", margin: "0 -12px", borderRadius: R.normal, background: fondoFila(k + reservas.length), color: P.muted }}>
                 <span>{m.nombre}</span>
-                <span style={{ fontFamily: "ui-monospace, monospace" }}>entra {hhmm(m.entra)}</span>
+                <span style={{ fontFamily: MONO }}>entra {hhmm(m.entra)}</span>
               </div>
             ))}
           </Bloque>
         )}
 
-        <button onClick={close} style={{ width: "100%", background: P.sunken, border: `1px solid ${P.rule}`, borderRadius: 9, padding: 12, fontFamily: "inherit", fontWeight: 600, fontSize: 14, cursor: "pointer", color: P.ink, marginTop: 4 }}>
+        <button onClick={close} style={{ width: "100%", background: P.sunken, border: `1px solid ${P.rule}`, borderRadius: R.normal, padding: 12, fontFamily: "inherit", fontWeight: 600, fontSize: T.alto, cursor: "pointer", color: P.ink, marginTop: 4 }}>
           Cerrar
         </button>
       </div>
@@ -6281,7 +6578,10 @@ const TABS = [
    detalles recortados en el color del fondo. Así pesan lo mismo y se leen
    igual sobre blanco que sobre el color de la línea.                      */
 function Icono({ tipo, activo, fondo }) {
-  const c = activo ? "#fff" : P.muted;
+  /* Al activarse, el icono baja sobre el fondo claro de la barra antes de
+     ocultarse bajo el rótulo: en blanco sería invisible durante el recorrido,
+     así que toma el color de la línea.                                   */
+  const c = activo ? P.blanco : P.muted;
   const bg = fondo || P.surface;
   const caja = { display: "block", position: "relative", width: 13, height: 13 };
 
@@ -6289,7 +6589,7 @@ function Icono({ tipo, activo, fondo }) {
     return (
       <span style={caja}>
         <span style={{ position: "absolute", left: 1, top: 0, width: 11, height: 13, background: c, borderRadius: "4px 4px 2px 2px" }} />
-        <span style={{ position: "absolute", left: 3, top: 2.5, width: 7, height: 4, background: bg, borderRadius: 1 }} />
+        <span style={{ position: "absolute", left: 3, top: 2.5, width: 7, height: 4, background: bg, borderRadius: R.hilo }} />
         <span style={{ position: "absolute", left: 3, bottom: 1.5, width: 2.5, height: 2.5, background: bg, borderRadius: "50%" }} />
         <span style={{ position: "absolute", right: 3, bottom: 1.5, width: 2.5, height: 2.5, background: bg, borderRadius: "50%" }} />
       </span>
@@ -6345,7 +6645,7 @@ function Icono({ tipo, activo, fondo }) {
     <span style={caja}>
       <span style={{ position: "absolute", left: 1, top: 0.5, width: 11, height: 12, background: c, borderRadius: "1px 2px 2px 1px" }} />
       {[3, 6, 9].map((y, n) => (
-        <span key={y} style={{ position: "absolute", left: 3, top: y, width: n === 2 ? 4 : 7, height: 1.5, background: bg, borderRadius: 1 }} />
+        <span key={y} style={{ position: "absolute", left: 3, top: y, width: n === 2 ? 4 : 7, height: 1.5, background: bg, borderRadius: R.hilo }} />
       ))}
     </span>
   );
@@ -6355,10 +6655,10 @@ function Icono({ tipo, activo, fondo }) {
 const PASTILLA = {
   width: 52,
   height: 28,
-  borderRadius: 7,
-  fontSize: 12,
+  borderRadius: R.normal,
+  fontSize: T.aux,
   fontWeight: 700,
-  fontFamily: "ui-monospace, monospace",
+  fontFamily: MONO,
   display: "inline-flex",
   alignItems: "center",
   justifyContent: "center",
@@ -6375,7 +6675,7 @@ function MiniKpi({ k, v, c }) {
         flex: 1,
         minWidth: 0,
         flexDirection: "column",
-        gap: 1,
+        gap: 2,
         background: P.sunken,
         border: `1px solid ${P.rule}`,
         lineHeight: 1,
@@ -6385,23 +6685,25 @@ function MiniKpi({ k, v, c }) {
           monoespaciada al valor, pero el rótulo va en la de la interfaz */}
       <span
         style={{
-          fontSize: 8,
+          fontSize: T.micro,
           letterSpacing: 0.5,
           textTransform: "uppercase",
           color: P.muted,
           fontWeight: 600,
-          fontFamily: "'Archivo', system-ui, sans-serif",
+          fontFamily: FUENTE,
           whiteSpace: "nowrap",
         }}
       >
         {k}
       </span>
-      <span style={{ fontSize: 12.5, fontWeight: 700, color: c }}>{v}</span>
+      <span style={{ fontSize: T.base, fontWeight: 700, color: c }}>{v}</span>
     </span>
   );
 }
 
-function BarraSuperior({ g, setG, tab, setTab }) {
+/* Barra de mando, anclada abajo: en el móvil el pulgar llega sin cruzar la
+   pantalla, y pausa, velocidad y pestañas son lo que más se toca.        */
+function BarraMando({ g, setG, tab, setTab }) {
   const [abierto, setAbierto] = useState(false);
   const activos = g.trenes.filter((t) => t.estado !== "suprimido");
   const punt = g.kpi.muestras ? (g.kpi.puntuales / g.kpi.muestras) * 100 : 100;
@@ -6410,7 +6712,7 @@ function BarraSuperior({ g, setG, tab, setTab }) {
     <div
       style={{
         position: "fixed",
-        top: 0,
+        bottom: 0,
         left: 0,
         right: 0,
         zIndex: 30,
@@ -6424,18 +6726,19 @@ function BarraSuperior({ g, setG, tab, setTab }) {
           width: "100%",
           maxWidth: 540,
           background: P.surface,
-          borderBottom: `1px solid ${P.rule}`,
-          boxShadow: "0 2px 10px rgba(10,14,17,.10)",
-          padding: "7px 0 4px",
+          borderTop: `1px solid ${P.rule}`,
+          boxShadow: SOMBRA.barra,
+          // el relleno inferior respeta la franja de gestos de los móviles
+          padding: "7px 0 calc(4px + env(safe-area-inset-bottom))",
           pointerEvents: "auto",
         }}
       >
-        <div style={{ display: "flex", alignItems: "center", gap: 5, padding: "0 5px" }}>
-          <span style={{ ...PASTILLA, background: LIN[LINEA], color: "#fff", border: "none" }}>{LINEA}</span>
+        <div style={{ display: "flex", alignItems: "center", gap: 4, padding: "0 5px" }}>
+          <span style={{ ...PASTILLA, background: LIN[LINEA], color: P.blanco, border: "none" }}>{LINEA}</span>
 
           <button
             onClick={() => setG((p) => ({ ...p, marcha: !p.marcha }))}
-            style={{ ...PASTILLA, border: `1px solid ${P.rule}`, background: g.marcha ? P.surface : P.ink, color: g.marcha ? P.ink : "#fff", cursor: "pointer" }}
+            style={{ ...PASTILLA, border: `1px solid ${P.rule}`, background: g.marcha ? P.surface : P.ink, color: g.marcha ? P.ink : P.blanco, cursor: "pointer" }}
           >
             {g.marcha ? "❚❚" : "▶"}
           </button>
@@ -6443,64 +6746,105 @@ function BarraSuperior({ g, setG, tab, setTab }) {
           <div style={{ position: "relative", flexShrink: 0 }}>
             <button
               onClick={() => setAbierto(!abierto)}
-              style={{ ...PASTILLA, border: `1px solid ${abierto ? P.ink : P.rule}`, background: abierto ? P.ink : P.surface, color: abierto ? "#fff" : P.ink, cursor: "pointer" }}
+              // ancho fijo: "×0,5" es más largo que "×40" y movía el reloj
+              style={{ ...PASTILLA, border: `1px solid ${abierto ? P.ink : P.rule}`, background: abierto ? P.ink : P.surface, color: abierto ? P.blanco : P.ink, cursor: "pointer", minWidth: 52, textAlign: "center" }}
             >
-              ×{g.vel} ▾
+              ×{velTxt(g.vel)} ▾
             </button>
+            {/* el desplegable se abre hacia arriba: abajo se saldría de la pantalla */}
             {abierto && (
-              <div style={{ position: "absolute", top: 28, left: 0, background: P.surface, border: `1px solid ${P.rule}`, borderRadius: 8, boxShadow: "0 4px 14px rgba(10,14,17,.16)", padding: 4, zIndex: 40 }}>
-                {[1, 4, 10, 40].map((v) => (
+              <div style={{ position: "absolute", bottom: 28, left: 0, background: P.surface, border: `1px solid ${P.rule}`, borderRadius: R.normal, boxShadow: SOMBRA.elevado, padding: 4, zIndex: 40 }}>
+                {VELOCIDADES.map((v) => (
                   <button
                     key={v}
                     onClick={() => {
                       setG((p) => ({ ...p, vel: v }));
                       setAbierto(false);
                     }}
-                    style={{ display: "block", width: 52, border: "none", background: g.vel === v ? P.sunken : "transparent", color: g.vel === v ? P.ink : P.muted, borderRadius: 5, padding: "6px 0", fontSize: 12, fontWeight: 700, fontFamily: "ui-monospace, monospace", cursor: "pointer" }}
+                    style={{ display: "block", width: 52, border: "none", background: g.vel === v ? P.sunken : "transparent", color: g.vel === v ? P.ink : P.muted, borderRadius: R.menudo, padding: "6px 0", fontSize: T.aux, fontWeight: 700, fontFamily: MONO, cursor: "pointer" }}
                   >
-                    ×{v}
+                    ×{velTxt(v)}
                   </button>
                 ))}
               </div>
             )}
           </div>
 
-          <MiniKpi k="PUNT" v={`${punt.toFixed(0)}%`} c={punt >= 92 ? P.ok : punt >= 75 ? P.warn : P.alert} />
+          <MiniKpi k="PUNT" v={`${punt.toFixed(0)}%`} c={colPuntualidad(punt)} />
           <MiniKpi k="RETR" v={retrasoMedio < 0.05 ? "0′" : `+${retrasoMedio.toFixed(1)}′`} c={colRetrasoMedio(retrasoMedio)} />
           <MiniKpi k="CIRCUL" v={`${activos.length}/${CIRCULACIONES}`} c={activos.length === CIRCULACIONES ? P.ok : P.warn} />
 
-          <span style={{ ...PASTILLA, width: "auto", padding: "0 8px", fontSize: 18, letterSpacing: -0.7 }}>{hhmm(g.reloj)}</span>
+          <span style={{ ...PASTILLA, width: "auto", padding: "0 8px", fontSize: T.titulo, letterSpacing: -0.7 }}>{hhmm(g.reloj)}</span>
         </div>
 
-        <div style={{ display: "flex", gap: 4, marginTop: 5, padding: "0 22px" }}>
+        <div style={{ display: "flex", gap: 4, marginTop: 4, padding: "0 22px" }}>
           {TABS.map((x) => {
             const on = tab === x.k;
             return (
               <button
                 key={x.k}
-                onClick={() => setTab(x.k)}
+                // pulsar la pestaña en la que ya estás lleva al principio
+                onClick={() => (on ? window.scrollTo({ top: 0, behavior: "smooth" }) : setTab(x.k))}
+                title={on ? "Ir al principio" : x.l}
                 style={{
                   flex: 1,
                   border: "none",
-                  borderRadius: "7px 7px 0 0",
+                  // el rojo abarca icono y palabra: se ve mejor qué menú está activo
                   background: on ? LIN[LINEA] : "transparent",
-                  color: on ? "#fff" : P.muted,
-                  padding: "5px 0 7px",
+                  borderRadius: "7px 7px 0 0",
+                  color: on ? P.blanco : P.muted,
+                  padding: "4px 0 0",
                   fontFamily: "inherit",
-                  fontSize: 10.5,
+                  fontSize: T.menor,
                   fontWeight: on ? 700 : 500,
                   cursor: "pointer",
                   display: "flex",
                   flexDirection: "column",
                   alignItems: "center",
-                  justifyContent: "center",
-                  gap: 3,
+                  position: "relative",
                 }}
               >
-                <span style={{ width: 14, height: 13, display: "flex", alignItems: "center", justifyContent: "center" }}>
-                  <Icono tipo={x.k} activo={on} fondo={on ? LIN[LINEA] : P.surface} />
+                {/* El icono se sumerge bajo la franja del rótulo y vuelve a
+                    salir. La ventana recorta lo que sobresale y la franja,
+                    opaca y del mismo rojo, lo oculta al llegar abajo.    */}
+                <span
+                  style={{
+                    width: 14,
+                    height: 15,
+                    // recorta el icono mientras baja; el rótulo opaco lo tapa
+                    overflow: "hidden",
+                    display: "flex",
+                    alignItems: "flex-start",
+                    justifyContent: "center",
+                  }}
+                >
+                  <span
+                    // se anima solo al activarse, y termina de nuevo arriba
+                    key={on ? "on" : "off"}
+                    style={{
+                      display: "flex",
+                      transform: "translateY(1px)",
+                      animation: on ? "cgo-inmersion .34s cubic-bezier(.4,0,.2,1)" : "none",
+                    }}
+                  >
+                    <Icono tipo={x.k} activo={on} fondo={on ? LIN[LINEA] : P.surface} />
+                  </span>
                 </span>
-                <span style={{ textAlign: "center", width: "100%" }}>{x.l}</span>
+
+                <span
+                  style={{
+                    position: "relative",
+                    zIndex: 1,
+                    textAlign: "center",
+                    width: "100%",
+                    // franja opaca del mismo rojo: es lo que oculta el icono
+                    background: on ? LIN[LINEA] : "transparent",
+                    padding: "3px 0 6px",
+                    transition: "background-color .2s ease, color .2s ease",
+                  }}
+                >
+                  {x.l}
+                </span>
               </button>
             );
           })}
@@ -6666,11 +7010,11 @@ function SelectorApartadero({ g, setG, i, close }) {
   const puntos = viasParaApartar(g, t).filter((x) => fijada === null || x.idx === fijada);
 
   return (
-    <div onClick={close} style={{ position: "fixed", inset: 0, background: "rgba(10,14,17,.45)", display: "flex", alignItems: "flex-end", justifyContent: "center", zIndex: 65 }}>
-      <div onClick={(e) => e.stopPropagation()} style={{ background: P.surface, width: "100%", maxWidth: 540, maxHeight: "84vh", overflowY: "auto", borderRadius: "16px 16px 0 0", padding: 16 }}>
+    <div onClick={close} style={{ position: "fixed", inset: 0, background: "rgba(10,14,17,.45)", animation: "cgo-fondo .18s ease-out", display: "flex", alignItems: "flex-end", justifyContent: "center", zIndex: 65 }}>
+      <div onClick={(e) => e.stopPropagation()} style={{ background: P.surface, width: "100%", maxWidth: 540, maxHeight: "84vh", overflowY: "auto", borderRadius: `${R.grande + 2}px ${R.grande + 2}px 0 0`, padding: 16, boxShadow: SOMBRA.hoja, animation: "cgo-hoja .22s ease-out" }}>
         <div style={ST.eyebrow}>Material vacío</div>
-        <div style={{ fontSize: 19, fontWeight: 700, letterSpacing: -0.4, margin: "3px 0 4px" }}>Dónde apartar el {numeroTren(t, g.reloj)}</div>
-        <div style={{ fontSize: 12.5, color: P.muted, marginBottom: 12, lineHeight: 1.45 }}>
+        <div style={{ fontSize: T.titulo, fontWeight: 700, letterSpacing: -0.4, margin: "3px 0 4px" }}>Dónde apartar el {numeroTren(t, g.reloj)}</div>
+        <div style={{ fontSize: T.base, color: P.muted, marginBottom: 12, lineHeight: 1.45 }}>
           {t.vacio
             ? "El tren circula sin viajeros con el bypass de puertas activado. "
             : "El tren queda fuera de servicio. "}
@@ -6679,10 +7023,10 @@ function SelectorApartadero({ g, setG, i, close }) {
 
         {t.supresion && (
           <div style={{ ...ST.card, padding: "10px 12px", marginBottom: 12, borderColor: P.warn }}>
-            <div style={{ fontSize: 11, color: P.muted, marginBottom: 3 }}>
+            <div style={{ fontSize: T.aux, color: P.muted, marginBottom: 4 }}>
               {t.supresion.noche ? `Termina servicio a las ${hhmm(t.supresion.hora)} en` : "Destino previsto ahora"}
             </div>
-            <div style={{ fontSize: 13.5, fontWeight: 700 }}>
+            <div style={{ fontSize: T.base, fontWeight: 700 }}>
               {ESTACIONES[t.supresion.idx].n}
               {t.supresion.via ? ` · ${t.supresion.via}` : ""}
             </div>
@@ -6690,7 +7034,7 @@ function SelectorApartadero({ g, setG, i, close }) {
         )}
 
         {puntos.length === 0 && (
-          <div style={{ fontSize: 13, color: P.alert, background: P.sunken, borderRadius: 8, padding: "10px 12px", marginBottom: 10 }}>
+          <div style={{ fontSize: T.base, color: P.alert, background: P.sunken, borderRadius: R.normal, padding: "10px 12px", marginBottom: 12 }}>
             No hay ninguna vía de apartado libre por delante que admita esta serie.
           </div>
         )}
@@ -6698,10 +7042,10 @@ function SelectorApartadero({ g, setG, i, close }) {
         {puntos.map((p2) => (
           <div key={p2.idx} style={{ ...ST.card, padding: 12, marginBottom: 8 }}>
             <div style={{ display: "flex", alignItems: "baseline", gap: 8, marginBottom: 8 }}>
-              <span style={{ fontSize: 14, fontWeight: 600, flex: 1 }}>{p2.nombre}</span>
-              <span style={{ fontSize: 11.5, color: P.muted, fontFamily: "ui-monospace, monospace" }}>llega en {p2.eta} min</span>
+              <span style={{ fontSize: T.alto, fontWeight: 600, flex: 1 }}>{p2.nombre}</span>
+              <span style={{ fontSize: T.aux, color: P.muted, fontFamily: MONO }}>llega en {p2.eta} min</span>
             </div>
-            <div style={{ display: "flex", gap: 5, flexWrap: "wrap" }}>
+            <div style={{ display: "flex", gap: 4, flexWrap: "wrap" }}>
               {p2.vias.map((v) => (
                 <button
                   key={v}
@@ -6709,7 +7053,7 @@ function SelectorApartadero({ g, setG, i, close }) {
                     setG((p3) => aplicar(clonar(p3), { destinoVacio: { i, idx: p2.idx, via: v } }));
                     close();
                   }}
-                  style={{ background: P.surface, color: P.ink, border: `1px solid ${P.rule}`, borderRadius: 20, padding: "6px 13px", fontSize: 12, fontWeight: 700, fontFamily: "ui-monospace, monospace", cursor: "pointer" }}
+                  style={{ background: P.surface, color: P.ink, border: `1px solid ${P.rule}`, borderRadius: R.pastilla, padding: "6px 13px", fontSize: T.aux, fontWeight: 700, fontFamily: MONO, cursor: "pointer" }}
                 >
                   {v}
                 </button>
@@ -6718,7 +7062,7 @@ function SelectorApartadero({ g, setG, i, close }) {
           </div>
         ))}
 
-        <button onClick={close} style={{ width: "100%", background: P.sunken, border: `1px solid ${P.rule}`, borderRadius: 9, padding: 12, fontFamily: "inherit", fontWeight: 600, fontSize: 14, cursor: "pointer", color: P.ink, marginTop: 4 }}>
+        <button onClick={close} style={{ width: "100%", background: P.sunken, border: `1px solid ${P.rule}`, borderRadius: R.normal, padding: 12, fontFamily: "inherit", fontWeight: 600, fontSize: T.alto, cursor: "pointer", color: P.ink, marginTop: 4 }}>
           Decidir más tarde
         </button>
       </div>
@@ -6814,11 +7158,13 @@ function crearVacio(g, { idx, via, maqId, destino, destinoVia, aTaller, dep }) {
     marchas: [
       {
         ini: Math.round(g.reloj),
-        fin: null,
+        fin: Math.round(g.reloj) + Math.max(1, Math.abs(ESTACIONES[destino].t - ESTACIONES[idx].t)),
         desde: ESTACIONES[idx].n,
         hasta: aTaller ? `taller de ${dep}` : ESTACIONES[destino].n,
         dir,
-        num: null,
+        num: numDeMarcha(g.reloj, dir === "pio", true),
+        estado: "curso",
+        iniReal: Math.round(g.reloj),
       },
     ],
   };
@@ -6860,16 +7206,16 @@ function SelectorVacio({ g, setG, idx, via, close }) {
 
   const pill = (on) => ({
     background: on ? P.ink : P.surface,
-    color: on ? "#fff" : P.ink,
+    color: on ? P.blanco : P.ink,
     border: `1px solid ${on ? P.ink : P.rule}`,
-    borderRadius: 20,
+    borderRadius: R.pastilla,
     padding: "6px 12px",
-    fontSize: 11.5,
+    fontSize: T.aux,
     fontWeight: 700,
     fontFamily: "inherit",
     cursor: "pointer",
-    marginRight: 5,
-    marginBottom: 5,
+    marginRight: 4,
+    marginBottom: 4,
   });
 
   const lanzar = () => {
@@ -6890,17 +7236,17 @@ function SelectorVacio({ g, setG, idx, via, close }) {
   };
 
   return (
-    <div onClick={close} style={{ position: "fixed", inset: 0, background: "rgba(10,14,17,.45)", display: "flex", alignItems: "flex-end", justifyContent: "center", zIndex: 66 }}>
-      <div onClick={(e) => e.stopPropagation()} style={{ background: P.surface, width: "100%", maxWidth: 540, maxHeight: "86vh", overflowY: "auto", borderRadius: "16px 16px 0 0", padding: 16 }}>
+    <div onClick={close} style={{ position: "fixed", inset: 0, background: "rgba(10,14,17,.45)", animation: "cgo-fondo .18s ease-out", display: "flex", alignItems: "flex-end", justifyContent: "center", zIndex: 66 }}>
+      <div onClick={(e) => e.stopPropagation()} style={{ background: P.surface, width: "100%", maxWidth: 540, maxHeight: "86vh", overflowY: "auto", borderRadius: `${R.grande + 2}px ${R.grande + 2}px 0 0`, padding: 16, boxShadow: SOMBRA.hoja, animation: "cgo-hoja .22s ease-out" }}>
         <div style={ST.eyebrow}>Material en vacío</div>
-        <div style={{ fontSize: 19, fontWeight: 700, letterSpacing: -0.4, margin: "3px 0 4px" }}>{lote.unidades.map((u) => u.id).join(" + ")}</div>
-        <div style={{ fontSize: 12.5, color: P.muted, marginBottom: 14, lineHeight: 1.45 }}>
+        <div style={{ fontSize: T.titulo, fontWeight: 700, letterSpacing: -0.4, margin: "3px 0 4px" }}>{lote.unidades.map((u) => u.id).join(" + ")}</div>
+        <div style={{ fontSize: T.base, color: P.muted, marginBottom: 16, lineHeight: 1.45 }}>
           Apartado en {ESTACIONES[idx].n}, {via}. El maquinista irá de viajero en el primer tren que pase por su residencia y, una vez allí, sacará el
           material hasta donde le digas.
         </div>
 
-        <div style={{ ...ST.eyebrow, marginBottom: 7 }}>Maquinista de reserva</div>
-        {reservas.length === 0 && <div style={{ fontSize: 12.5, color: P.alert, marginBottom: 10 }}>No hay ningún maquinista de reserva libre.</div>}
+        <div style={{ ...ST.eyebrow, marginBottom: 8 }}>Maquinista de reserva</div>
+        {reservas.length === 0 && <div style={{ fontSize: T.base, color: P.alert, marginBottom: 12 }}>No hay ningún maquinista de reserva libre.</div>}
         <div style={{ display: "flex", flexWrap: "wrap", marginBottom: 12 }}>
           {reservas.map((m) => {
             const iCab = ESTACIONES.findIndex((e) => e.cab === m.lugar);
@@ -6913,7 +7259,7 @@ function SelectorVacio({ g, setG, idx, via, close }) {
           })}
         </div>
 
-        <div style={{ ...ST.eyebrow, marginBottom: 7 }}>Destino</div>
+        <div style={{ ...ST.eyebrow, marginBottom: 8 }}>Destino</div>
         {destinos.map((d) =>
           d.vias.map((v) => (
             <button
@@ -6934,11 +7280,11 @@ function SelectorVacio({ g, setG, idx, via, close }) {
         <button
           onClick={lanzar}
           disabled={!maq || !dest}
-          style={{ width: "100%", background: maq && dest ? P.ink : P.sunken, color: maq && dest ? "#fff" : P.muted, border: "none", borderRadius: 9, padding: 13, fontFamily: "inherit", fontWeight: 700, fontSize: 14, cursor: maq && dest ? "pointer" : "not-allowed", marginTop: 12 }}
+          style={{ width: "100%", background: maq && dest ? P.ink : P.sunken, color: maq && dest ? P.blanco : P.muted, border: "none", borderRadius: R.normal, padding: 12, fontFamily: "inherit", fontWeight: 700, fontSize: T.alto, cursor: maq && dest ? "pointer" : "not-allowed", marginTop: 12 }}
         >
           Ordenar la marcha en vacío
         </button>
-        <button onClick={close} style={{ width: "100%", background: "transparent", border: "none", color: P.muted, padding: "12px 0 0", fontFamily: "inherit", fontSize: 12.5, fontWeight: 600, cursor: "pointer" }}>
+        <button onClick={close} style={{ width: "100%", background: "transparent", border: "none", color: P.muted, padding: "12px 0 0", fontFamily: "inherit", fontSize: T.base, fontWeight: 600, cursor: "pointer" }}>
           Cancelar
         </button>
       </div>
@@ -6962,31 +7308,31 @@ function SelectorReposicion({ g, setG, i, close }) {
   }).filter((p2) => p2.cuando !== null);
 
   return (
-    <div onClick={close} style={{ position: "fixed", inset: 0, background: "rgba(10,14,17,.45)", display: "flex", alignItems: "flex-end", justifyContent: "center", zIndex: 64 }}>
-      <div onClick={(e) => e.stopPropagation()} style={{ background: P.surface, width: "100%", maxWidth: 540, maxHeight: "84vh", overflowY: "auto", borderRadius: "16px 16px 0 0", padding: 16 }}>
+    <div onClick={close} style={{ position: "fixed", inset: 0, background: "rgba(10,14,17,.45)", animation: "cgo-fondo .18s ease-out", display: "flex", alignItems: "flex-end", justifyContent: "center", zIndex: 64 }}>
+      <div onClick={(e) => e.stopPropagation()} style={{ background: P.surface, width: "100%", maxWidth: 540, maxHeight: "84vh", overflowY: "auto", borderRadius: `${R.grande + 2}px ${R.grande + 2}px 0 0`, padding: 16, boxShadow: SOMBRA.hoja, animation: "cgo-hoja .22s ease-out" }}>
         <div style={ST.eyebrow}>Reposición</div>
-        <div style={{ fontSize: 19, fontWeight: 700, letterSpacing: -0.4, margin: "3px 0 4px" }}>Circulación {t.i}</div>
-        <div style={{ fontSize: 12.5, color: P.muted, marginBottom: 14, lineHeight: 1.45 }}>
+        <div style={{ fontSize: T.titulo, fontWeight: 700, letterSpacing: -0.4, margin: "3px 0 4px" }}>Circulación {t.i}</div>
+        <div style={{ fontSize: T.base, color: P.muted, marginBottom: 16, lineHeight: 1.45 }}>
           La marcha sigue existiendo: con material y maquinista vuelve al servicio cuando su horario pase de nuevo por una cabecera. Hacen falta{" "}
           {MARGEN_REPOSICION} min de preparación.
         </div>
 
         {puntos.length === 0 && (
-          <div style={{ fontSize: 13, color: P.alert, background: P.sunken, borderRadius: 8, padding: "10px 12px", marginBottom: 10 }}>
+          <div style={{ fontSize: T.base, color: P.alert, background: P.sunken, borderRadius: R.normal, padding: "10px 12px", marginBottom: 12 }}>
             Ya no quedan pasos por cabecera antes del final del turno.
           </div>
         )}
 
         {puntos.map((p2) => (
           <div key={p2.idx} style={{ ...ST.card, padding: 12, marginBottom: 8 }}>
-            <div style={{ display: "flex", alignItems: "baseline", gap: 8, marginBottom: 7 }}>
-              <span style={{ fontSize: 14, fontWeight: 600, flex: 1 }}>{p2.nombre}</span>
-              <span style={{ fontSize: 12.5, fontWeight: 700, fontFamily: "ui-monospace, monospace", color: P.ink }}>{hhmm(p2.cuando)}</span>
-              <span style={{ fontSize: 11, color: P.muted }}>en {Math.round(p2.cuando - g.reloj)} min</span>
+            <div style={{ display: "flex", alignItems: "baseline", gap: 8, marginBottom: 8 }}>
+              <span style={{ fontSize: T.alto, fontWeight: 600, flex: 1 }}>{p2.nombre}</span>
+              <span style={{ fontSize: T.base, fontWeight: 700, fontFamily: MONO, color: P.ink }}>{hhmm(p2.cuando)}</span>
+              <span style={{ fontSize: T.aux, color: P.muted }}>en {Math.round(p2.cuando - g.reloj)} min</span>
             </div>
 
-            {!p2.reservas && <div style={{ fontSize: 11.5, color: P.alert, marginBottom: 5 }}>Sin maquinista de reserva en esta cabecera.</div>}
-            {p2.comps.length === 0 && <div style={{ fontSize: 11.5, color: P.muted }}>No hay material disponible aquí.</div>}
+            {!p2.reservas && <div style={{ fontSize: T.aux, color: P.alert, marginBottom: 4 }}>Sin maquinista de reserva en esta cabecera.</div>}
+            {p2.comps.length === 0 && <div style={{ fontSize: T.aux, color: P.muted }}>No hay material disponible aquí.</div>}
 
             {p2.comps.map((c) => (
               <button
@@ -6996,19 +7342,19 @@ function SelectorReposicion({ g, setG, i, close }) {
                   setG((p3) => aplicar(clonar(p3), { reponer: { i, idx: p2.idx, clave: c.clave, cuando: p2.cuando } }));
                   close();
                 }}
-                style={{ display: "block", width: "100%", textAlign: "left", background: P.surface, border: `1px solid ${P.rule}`, borderRadius: 8, padding: "9px 11px", marginBottom: 5, fontFamily: "inherit", cursor: p2.reservas ? "pointer" : "not-allowed", opacity: p2.reservas ? 1 : 0.4, color: P.ink }}
+                style={{ display: "block", width: "100%", textAlign: "left", background: P.surface, border: `1px solid ${P.rule}`, borderRadius: R.normal, padding: "9px 11px", marginBottom: 4, fontFamily: "inherit", cursor: p2.reservas ? "pointer" : "not-allowed", opacity: p2.reservas ? 1 : 0.4, color: P.ink }}
               >
                 <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", gap: 8 }}>
-                  <span style={{ fontSize: 12.5, fontWeight: 700, fontFamily: "ui-monospace, monospace" }}>{c.unidades.map((u) => u.id).join(" + ")}</span>
-                  <span style={{ fontSize: 11.5, color: P.muted, fontFamily: "ui-monospace, monospace" }}>{nf(c.unidades.reduce((n, u) => n + u.plazas, 0))} pl</span>
+                  <span style={{ fontSize: T.base, fontWeight: 700, fontFamily: MONO }}>{c.unidades.map((u) => u.id).join(" + ")}</span>
+                  <span style={{ fontSize: T.aux, color: P.muted, fontFamily: MONO }}>{nf(c.unidades.reduce((n, u) => n + u.plazas, 0))} pl</span>
                 </div>
-                <div style={{ fontSize: 11, color: P.muted, marginTop: 2 }}>{c.origen}</div>
+                <div style={{ fontSize: T.aux, color: P.muted, marginTop: 2 }}>{c.origen}</div>
               </button>
             ))}
           </div>
         ))}
 
-        <button onClick={close} style={{ width: "100%", background: P.sunken, border: `1px solid ${P.rule}`, borderRadius: 9, padding: 12, fontFamily: "inherit", fontWeight: 600, fontSize: 14, cursor: "pointer", color: P.ink, marginTop: 4 }}>
+        <button onClick={close} style={{ width: "100%", background: P.sunken, border: `1px solid ${P.rule}`, borderRadius: R.normal, padding: 12, fontFamily: "inherit", fontWeight: 600, fontSize: T.alto, cursor: "pointer", color: P.ink, marginTop: 4 }}>
           Cerrar
         </button>
       </div>
@@ -7023,17 +7369,17 @@ function SelectorSupresion({ g, setG, i, close }) {
   const aBordo = t.pax.reduce((n, v) => n + v, 0);
 
   return (
-    <div onClick={close} style={{ position: "fixed", inset: 0, background: "rgba(10,14,17,.45)", display: "flex", alignItems: "flex-end", justifyContent: "center", zIndex: 63 }}>
-      <div onClick={(e) => e.stopPropagation()} style={{ background: P.surface, width: "100%", maxWidth: 540, maxHeight: "80vh", overflowY: "auto", borderRadius: "16px 16px 0 0", padding: 16 }}>
+    <div onClick={close} style={{ position: "fixed", inset: 0, background: "rgba(10,14,17,.45)", animation: "cgo-fondo .18s ease-out", display: "flex", alignItems: "flex-end", justifyContent: "center", zIndex: 63 }}>
+      <div onClick={(e) => e.stopPropagation()} style={{ background: P.surface, width: "100%", maxWidth: 540, maxHeight: "80vh", overflowY: "auto", borderRadius: `${R.grande + 2}px ${R.grande + 2}px 0 0`, padding: 16, boxShadow: SOMBRA.hoja, animation: "cgo-hoja .22s ease-out" }}>
         <div style={ST.eyebrow}>Supresión</div>
-        <div style={{ fontSize: 19, fontWeight: 700, letterSpacing: -0.4, margin: "3px 0 4px" }}>Suprimir el {numeroTren(t, g.reloj)}</div>
-        <div style={{ fontSize: 12.5, color: P.muted, marginBottom: 14, lineHeight: 1.45 }}>
+        <div style={{ fontSize: T.titulo, fontWeight: 700, letterSpacing: -0.4, margin: "3px 0 4px" }}>Suprimir el {numeroTren(t, g.reloj)}</div>
+        <div style={{ fontSize: T.base, color: P.muted, marginBottom: 16, lineHeight: 1.45 }}>
           El tren termina recorrido, los viajeros transbordan al siguiente y el material queda estacionado, listo para entrar en taller. Se pierde la
           circulación el resto del turno.
         </div>
 
         {ests.length === 0 && (
-          <div style={{ fontSize: 13, color: P.alert, background: P.sunken, borderRadius: 8, padding: "10px 12px", marginBottom: 10 }}>
+          <div style={{ fontSize: T.base, color: P.alert, background: P.sunken, borderRadius: R.normal, padding: "10px 12px", marginBottom: 12 }}>
             No hay ninguna estación con apartadero libre por delante que admita esta serie.
           </div>
         )}
@@ -7045,20 +7391,20 @@ function SelectorSupresion({ g, setG, i, close }) {
               setG((p) => aplicar(clonar(p), { supresion: { i, idx: e.idx, via: e.via } }));
               close();
             }}
-            style={{ display: "block", width: "100%", textAlign: "left", background: P.surface, border: `1px solid ${P.rule}`, borderRadius: 9, padding: "11px 12px", marginBottom: 6, fontFamily: "inherit", cursor: "pointer", color: P.ink }}
+            style={{ display: "block", width: "100%", textAlign: "left", background: P.surface, border: `1px solid ${P.rule}`, borderRadius: R.normal, padding: "11px 12px", marginBottom: 8, fontFamily: "inherit", cursor: "pointer", color: P.ink }}
           >
             <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", gap: 8 }}>
-              <span style={{ fontSize: 14, fontWeight: 600 }}>{e.nombre}</span>
-              <span style={{ fontSize: 12.5, color: P.muted, fontFamily: "ui-monospace, monospace" }}>llega en {e.eta} min</span>
+              <span style={{ fontSize: T.alto, fontWeight: 600 }}>{e.nombre}</span>
+              <span style={{ fontSize: T.base, color: P.muted, fontFamily: MONO }}>llega en {e.eta} min</span>
             </div>
-            <div style={{ fontSize: 11.5, color: P.muted, marginTop: 2 }}>
+            <div style={{ fontSize: T.aux, color: P.muted, marginTop: 2 }}>
               {e.via} · deja {e.sinServicio} estación{e.sinServicio !== 1 ? "es" : ""} sin esta circulación
               {aBordo > 1 ? ` · ${nf(aBordo)} viajeros a bordo ahora` : ""}
             </div>
           </button>
         ))}
 
-        <button onClick={close} style={{ width: "100%", background: P.sunken, border: `1px solid ${P.rule}`, borderRadius: 9, padding: 12, fontFamily: "inherit", fontWeight: 600, fontSize: 14, cursor: "pointer", color: P.ink, marginTop: 4 }}>
+        <button onClick={close} style={{ width: "100%", background: P.sunken, border: `1px solid ${P.rule}`, borderRadius: R.normal, padding: 12, fontFamily: "inherit", fontWeight: 600, fontSize: T.alto, cursor: "pointer", color: P.ink, marginTop: 4 }}>
           Cerrar
         </button>
       </div>
@@ -7111,20 +7457,20 @@ function SelectorTaller({ g, setG, id, close }) {
   };
 
   return (
-    <div onClick={close} style={{ position: "fixed", inset: 0, background: "rgba(10,14,17,.45)", display: "flex", alignItems: "flex-end", justifyContent: "center", zIndex: 70 }}>
-      <div onClick={(e) => e.stopPropagation()} style={{ background: P.surface, width: "100%", maxWidth: 540, maxHeight: "86vh", overflowY: "auto", borderRadius: "16px 16px 0 0", padding: 16 }}>
+    <div onClick={close} style={{ position: "fixed", inset: 0, background: "rgba(10,14,17,.45)", animation: "cgo-fondo .18s ease-out", display: "flex", alignItems: "flex-end", justifyContent: "center", zIndex: 70 }}>
+      <div onClick={(e) => e.stopPropagation()} style={{ background: P.surface, width: "100%", maxWidth: 540, maxHeight: "86vh", overflowY: "auto", borderRadius: `${R.grande + 2}px ${R.grande + 2}px 0 0`, padding: 16, boxShadow: SOMBRA.hoja, animation: "cgo-hoja .22s ease-out" }}>
         <div style={ST.eyebrow}>Taller</div>
-        <div style={{ fontSize: 22, fontWeight: 700, fontFamily: "ui-monospace, monospace", letterSpacing: -0.6 }}>{id}</div>
-        <div style={{ fontSize: 12.5, color: averiada ? P.alert : P.muted, marginBottom: 12 }}>
+        <div style={{ fontSize: T.cabecera, fontWeight: 700, fontFamily: MONO, letterSpacing: -0.6 }}>{id}</div>
+        <div style={{ fontSize: T.base, color: averiada ? P.alert : P.muted, marginBottom: 12 }}>
           {est.txt} · desgaste {Math.round(d)} % · fiabilidad {Math.round(fiabDesgaste(d) * 100)} %
         </div>
 
         {enTaller ? (
           <>
             <Bloque titulo="En reparación">
-              <div style={{ padding: "6px 0", fontSize: 12.5 }}>
+              <div style={{ padding: "6px 0", fontSize: T.base }}>
                 {[["Trabajo", REVISIONES[enTaller.tipo].n], ["Taller", enTaller.dep], ["Turnos restantes", String(enTaller.restan)]].map(([k, v], n2) => (
-                  <div key={k} style={{ display: "flex", justifyContent: "space-between", padding: "6px 10px", margin: "0 -12px", borderRadius: 6, background: fondoFila(n2) }}>
+                  <div key={k} style={{ display: "flex", justifyContent: "space-between", padding: "6px 10px", margin: "0 -12px", borderRadius: R.normal, background: fondoFila(n2) }}>
                     <span style={{ color: P.muted }}>{k}</span>
                     <span style={{ fontWeight: 600 }}>{v}</span>
                   </div>
@@ -7133,19 +7479,19 @@ function SelectorTaller({ g, setG, id, close }) {
             </Bloque>
             <button
               onClick={sacar}
-              style={{ width: "100%", background: enTaller.restan > 0 ? P.surface : P.ink, color: enTaller.restan > 0 ? P.ink : "#fff", border: `1px solid ${enTaller.restan > 0 ? P.warn : P.ink}`, borderRadius: 9, padding: 13, fontFamily: "inherit", fontWeight: 600, fontSize: 14, cursor: "pointer", marginBottom: 8 }}
+              style={{ width: "100%", background: enTaller.restan > 0 ? P.surface : P.ink, color: enTaller.restan > 0 ? P.ink : P.blanco, border: `1px solid ${enTaller.restan > 0 ? P.warn : P.ink}`, borderRadius: R.normal, padding: 12, fontFamily: "inherit", fontWeight: 600, fontSize: T.alto, cursor: "pointer", marginBottom: 8 }}
             >
               {enTaller.restan > 0 ? "Sacar antes de tiempo · solo cuenta lo hecho" : "Sacar de taller"}
             </button>
           </>
         ) : est.corto === "Circulando" ? (
-          <div style={{ fontSize: 12.5, color: P.muted, background: P.sunken, borderRadius: 8, padding: "10px 12px", marginBottom: 10, lineHeight: 1.45 }}>
+          <div style={{ fontSize: T.base, color: P.muted, background: P.sunken, borderRadius: R.normal, padding: "10px 12px", marginBottom: 12, lineHeight: 1.45 }}>
             La unidad está en servicio. Hay que apartarla, o esperar al cierre del turno, para poder meterla en taller.
           </div>
         ) : (
           <>
             {averiada && (
-              <div style={{ fontSize: 12, color: P.alert, background: P.sunken, borderRadius: 8, padding: "9px 11px", marginBottom: 10, lineHeight: 1.45 }}>
+              <div style={{ fontSize: T.aux, color: P.alert, background: P.sunken, borderRadius: R.normal, padding: "9px 11px", marginBottom: 12, lineHeight: 1.45 }}>
                 Unidad inútil: solo admite reparación, y no vuelve al servicio hasta terminarla.
               </div>
             )}
@@ -7153,8 +7499,8 @@ function SelectorTaller({ g, setG, id, close }) {
               <div key={o.dep} style={{ ...ST.card, padding: 12, marginBottom: 8 }}>
                 <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 8 }}>
                   <Enlace txt={o.dep} bg={(DEPOSITOS[o.dep] || {}).color || P.muted} />
-                  {o.propio && <span style={{ fontSize: 9.5, fontWeight: 700, color: P.muted, border: `1px solid ${P.rule}`, borderRadius: 3, padding: "0 4px" }}>SU TALLER</span>}
-                  <span style={{ fontSize: 11.5, color: o.libres ? P.ok : P.alert, fontWeight: 700, marginLeft: "auto" }}>
+                  {o.propio && <span style={{ fontSize: T.micro, fontWeight: 700, color: P.muted, border: `1px solid ${P.rule}`, borderRadius: R.menudo, padding: "0 4px" }}>SU TALLER</span>}
+                  <span style={{ fontSize: T.aux, color: o.libres ? P.ok : P.alert, fontWeight: 700, marginLeft: "auto" }}>
                     {o.libres} de {o.plazas} libres
                   </span>
                 </div>
@@ -7166,15 +7512,15 @@ function SelectorTaller({ g, setG, id, close }) {
                       key={tipo}
                       disabled={!o.libres}
                       onClick={() => meter(o.dep, tipo)}
-                      style={{ display: "block", width: "100%", textAlign: "left", background: P.surface, border: `1px solid ${P.rule}`, borderRadius: 8, padding: "9px 11px", marginBottom: 5, fontFamily: "inherit", cursor: o.libres ? "pointer" : "not-allowed", opacity: o.libres ? 1 : 0.4, color: P.ink }}
+                      style={{ display: "block", width: "100%", textAlign: "left", background: P.surface, border: `1px solid ${P.rule}`, borderRadius: R.normal, padding: "9px 11px", marginBottom: 4, fontFamily: "inherit", cursor: o.libres ? "pointer" : "not-allowed", opacity: o.libres ? 1 : 0.4, color: P.ink }}
                     >
                       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", gap: 8 }}>
-                        <span style={{ fontSize: 13.5, fontWeight: 600 }}>{rv.n}</span>
-                        <span style={{ fontSize: 12, fontWeight: 700, fontFamily: "ui-monospace, monospace", color: P.ok }}>
+                        <span style={{ fontSize: T.base, fontWeight: 600 }}>{rv.n}</span>
+                        <span style={{ fontSize: T.aux, fontWeight: 700, fontFamily: MONO, color: P.ok }}>
                           {Math.round(d)}% → {Math.round(queda)}%
                         </span>
                       </div>
-                      <div style={{ fontSize: 11.5, color: P.muted, marginTop: 2 }}>
+                      <div style={{ fontSize: T.aux, color: P.muted, marginTop: 2 }}>
                         {rv.turnos} {rv.turnos === 1 ? "turno" : "turnos"} fuera de servicio · {nf(rv.coste)} € · fiabilidad {Math.round(fiabDesgaste(queda) * 100)} %
                       </div>
                     </button>
@@ -7185,7 +7531,7 @@ function SelectorTaller({ g, setG, id, close }) {
           </>
         )}
 
-        <button onClick={close} style={{ width: "100%", background: P.sunken, border: `1px solid ${P.rule}`, borderRadius: 9, padding: 12, fontFamily: "inherit", fontWeight: 600, fontSize: 14, cursor: "pointer", color: P.ink }}>
+        <button onClick={close} style={{ width: "100%", background: P.sunken, border: `1px solid ${P.rule}`, borderRadius: R.normal, padding: 12, fontFamily: "inherit", fontWeight: 600, fontSize: T.alto, cursor: "pointer", color: P.ink }}>
           Cerrar
         </button>
       </div>
@@ -7243,36 +7589,36 @@ function Taller({ g, setG, verUnidad, abierto, setAbierto, setGestion }) {
       {/* ── listas para salir ── */}
       {listas.length > 0 && (
         <div style={{ ...ST.card, padding: 12, marginBottom: 8, borderColor: P.ok }}>
-          <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 7 }}>
-            <span style={{ fontSize: 13, fontWeight: 700, color: P.ok, flex: 1 }}>
+          <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 8 }}>
+            <span style={{ fontSize: T.base, fontWeight: 700, color: P.ok, flex: 1 }}>
               {listas.length} unidad{listas.length === 1 ? "" : "es"} lista{listas.length === 1 ? "" : "s"} para salir
             </span>
             <button
               onClick={sacarTodas}
-              style={{ background: P.ok, color: "#fff", border: "none", borderRadius: 7, padding: "6px 12px", fontFamily: "inherit", fontSize: 12, fontWeight: 700, cursor: "pointer" }}
+              style={{ background: P.ok, color: P.blanco, border: "none", borderRadius: R.normal, padding: "6px 12px", fontFamily: "inherit", fontSize: T.aux, fontWeight: 700, cursor: "pointer" }}
             >
               Sacar todas
             </button>
           </div>
-          <div style={{ fontSize: 11.5, color: P.muted, fontFamily: "ui-monospace, monospace", lineHeight: 1.5 }}>
+          <div style={{ fontSize: T.aux, color: P.muted, fontFamily: MONO, lineHeight: 1.5 }}>
             {listas.map(([id, t]) => `${id} · ${t.dep}`).join("  ·  ")}
           </div>
         </div>
       )}
 
       {/* ── pendientes de decisión ── */}
-      <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 6 }}>
+      <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 8 }}>
         <span style={{ ...ST.eyebrow, flex: 1 }}>Pendientes · {pend.length}</span>
         <button
           onClick={() => setSel(propuestaMantenimiento(g, semilla))}
-          style={{ background: P.surface, color: P.ink, border: `1px solid ${P.rule}`, borderRadius: 7, padding: "5px 11px", fontFamily: "inherit", fontSize: 11.5, fontWeight: 700, cursor: "pointer" }}
+          style={{ background: P.surface, color: P.ink, border: `1px solid ${P.rule}`, borderRadius: R.normal, padding: "5px 11px", fontFamily: "inherit", fontSize: T.aux, fontWeight: 700, cursor: "pointer" }}
         >
           Proponer
         </button>
         {nSel > 0 && (
           <button
             onClick={() => setSel({})}
-            style={{ background: "transparent", color: P.muted, border: "none", fontFamily: "inherit", fontSize: 11.5, fontWeight: 600, cursor: "pointer" }}
+            style={{ background: "transparent", color: P.muted, border: "none", fontFamily: "inherit", fontSize: T.aux, fontWeight: 600, cursor: "pointer" }}
           >
             Limpiar
           </button>
@@ -7280,7 +7626,7 @@ function Taller({ g, setG, verUnidad, abierto, setAbierto, setGestion }) {
       </div>
 
       {pend.length === 0 && (
-        <div style={{ ...ST.card, padding: 12, marginBottom: 8, fontSize: 12.5, color: P.muted }}>
+        <div style={{ ...ST.card, padding: 12, marginBottom: 8, fontSize: T.base, color: P.muted }}>
           Nada pendiente. Solo se puede mandar a taller material parado: suprime un tren o espera a que se aparte alguna unidad.
         </div>
       )}
@@ -7289,7 +7635,7 @@ function Taller({ g, setG, verUnidad, abierto, setAbierto, setGestion }) {
         const marcada = sel[p.u.id];
         const opciones = talleresPara(g, p.u, semilla);
         return (
-          <div key={p.u.id} style={{ ...ST.card, padding: 12, marginBottom: 6, borderColor: marcada ? P.ink : p.averiada ? P.alert : P.rule }}>
+          <div key={p.u.id} style={{ ...ST.card, padding: 12, marginBottom: 8, borderColor: marcada ? P.ink : p.averiada ? P.alert : P.rule }}>
             <div
               onClick={() => marcar(p.u.id, marcada ? null : { tipo: revisionSugerida(p), dep: (opciones.find((o) => o.libres > 0) || opciones[0] || {}).dep })}
               style={{ display: "flex", alignItems: "center", gap: 8, cursor: "pointer" }}
@@ -7298,11 +7644,11 @@ function Taller({ g, setG, verUnidad, abierto, setAbierto, setGestion }) {
                 style={{
                   width: 16,
                   height: 16,
-                  borderRadius: 4,
+                  borderRadius: R.menudo,
                   border: `1.5px solid ${marcada ? P.ink : P.rule}`,
                   background: marcada ? P.ink : P.surface,
-                  color: "#fff",
-                  fontSize: 11,
+                  color: P.blanco,
+                  fontSize: T.aux,
                   display: "flex",
                   alignItems: "center",
                   justifyContent: "center",
@@ -7311,18 +7657,18 @@ function Taller({ g, setG, verUnidad, abierto, setAbierto, setGestion }) {
               >
                 {marcada ? "✓" : ""}
               </span>
-              <span style={{ fontSize: 13, fontWeight: 700, fontFamily: "ui-monospace, monospace" }}>{p.u.id}</span>
-              <span style={{ fontSize: 11.5, fontWeight: 700, fontFamily: "ui-monospace, monospace", color: p.d >= 85 ? P.alert : p.d >= 60 ? P.warn : P.muted }}>
+              <span style={{ fontSize: T.base, fontWeight: 700, fontFamily: MONO }}>{p.u.id}</span>
+              <span style={{ fontSize: T.aux, fontWeight: 700, fontFamily: MONO, color: colDesgaste(p.d) }}>
                 {Math.round(p.d)}%
               </span>
-              <span style={{ fontSize: 10.5, fontWeight: 700, color: p.est.c, flex: 1, textAlign: "right", minWidth: 0, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
+              <span style={{ fontSize: T.menor, fontWeight: 700, color: p.est.c, flex: 1, textAlign: "right", minWidth: 0, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
                 {p.est.txt}
               </span>
             </div>
 
             {marcada && (
-              <div style={{ marginTop: 9, paddingTop: 9, borderTop: `1px solid ${P.sunken}` }}>
-                <div style={{ display: "flex", gap: 4, flexWrap: "wrap", marginBottom: 6 }}>
+              <div style={{ marginTop: 8, paddingTop: 8, borderTop: `1px solid ${P.sunken}` }}>
+                <div style={{ display: "flex", gap: 4, flexWrap: "wrap", marginBottom: 8 }}>
                   {(p.averiada
                     ? ["reparacion"]
                     : (TALLERES[marcada.dep] || {}).soloReparacion
@@ -7334,11 +7680,11 @@ function Taller({ g, setG, verUnidad, abierto, setAbierto, setGestion }) {
                       onClick={() => marcar(p.u.id, { tipo })}
                       style={{
                         background: marcada.tipo === tipo ? P.ink : P.surface,
-                        color: marcada.tipo === tipo ? "#fff" : P.ink,
+                        color: marcada.tipo === tipo ? P.blanco : P.ink,
                         border: `1px solid ${marcada.tipo === tipo ? P.ink : P.rule}`,
-                        borderRadius: 20,
+                        borderRadius: R.pastilla,
                         padding: "4px 10px",
-                        fontSize: 11,
+                        fontSize: T.aux,
                         fontWeight: 700,
                         fontFamily: "inherit",
                         cursor: "pointer",
@@ -7361,11 +7707,11 @@ function Taller({ g, setG, verUnidad, abierto, setAbierto, setGestion }) {
                       }
                       style={{
                         background: marcada.dep === o.dep ? (DEPOSITOS[o.dep] || {}).color || P.ink : P.surface,
-                        color: marcada.dep === o.dep ? "#fff" : o.libres ? P.ink : P.muted,
+                        color: marcada.dep === o.dep ? P.blanco : o.libres ? P.ink : P.muted,
                         border: `1px solid ${marcada.dep === o.dep ? "transparent" : P.rule}`,
-                        borderRadius: 20,
+                        borderRadius: R.pastilla,
                         padding: "4px 10px",
-                        fontSize: 11,
+                        fontSize: T.aux,
                         fontWeight: 700,
                         fontFamily: "inherit",
                         cursor: o.libres ? "pointer" : "not-allowed",
@@ -7376,7 +7722,7 @@ function Taller({ g, setG, verUnidad, abierto, setAbierto, setGestion }) {
                     </button>
                   ))}
                 </div>
-                <div style={{ fontSize: 11, color: P.muted, marginTop: 6 }}>
+                <div style={{ fontSize: T.aux, color: P.muted, marginTop: 8 }}>
                   {Math.round(p.d)}% → {Math.round(Math.max(0, p.d - REVISIONES[marcada.tipo].quita))}% · {nf(REVISIONES[marcada.tipo].coste)} €
                 </div>
               </div>
@@ -7386,16 +7732,16 @@ function Taller({ g, setG, verUnidad, abierto, setAbierto, setGestion }) {
       })}
 
       {nSel > 0 && (
-        <div style={{ ...ST.card, padding: 12, marginTop: 4, marginBottom: 10, borderColor: avisos.length ? P.alert : P.ink }}>
+        <div style={{ ...ST.card, padding: 12, marginTop: 4, marginBottom: 12, borderColor: avisos.length ? P.alert : P.ink }}>
           {avisos.map((a2) => (
-            <div key={a2.serie} style={{ fontSize: 12, color: P.alert, fontWeight: 600, marginBottom: 5, lineHeight: 1.4 }}>
+            <div key={a2.serie} style={{ fontSize: T.aux, color: P.alert, fontWeight: 600, marginBottom: 4, lineHeight: 1.4 }}>
               Serie {a2.serie}: quedarían {a2.disponibles} unidades disponibles y hacen falta {a2.enServicio} para cubrir el turno.
             </div>
           ))}
           <button
             onClick={confirmar}
             disabled={Object.values(sel).some((v) => !v.dep)}
-            style={{ width: "100%", background: P.ink, color: "#fff", border: "none", borderRadius: 8, padding: 13, fontFamily: "inherit", fontSize: 14, fontWeight: 700, cursor: "pointer" }}
+            style={{ width: "100%", background: P.ink, color: P.blanco, border: "none", borderRadius: R.normal, padding: 12, fontFamily: "inherit", fontSize: T.alto, fontWeight: 700, cursor: "pointer" }}
           >
             Enviar {nSel} unidad{nSel === 1 ? "" : "es"} · {nf(coste)} €
           </button>
@@ -7411,23 +7757,23 @@ function Taller({ g, setG, verUnidad, abierto, setAbierto, setGestion }) {
         const dentro = Object.entries(g.taller).filter(([, v]) => v.dep === dep);
         const desplegado = tallerAbierto === dep;
         return (
-          <div key={dep} style={{ ...ST.card, padding: "10px 12px", marginBottom: 6 }}>
+          <div key={dep} style={{ ...ST.card, padding: "10px 12px", marginBottom: 8 }}>
             <div
               onClick={() => dentro.length && setTallerAbierto(desplegado ? null : dep)}
               style={{ display: "flex", alignItems: "center", gap: 8, cursor: dentro.length ? "pointer" : "default" }}
             >
               <Enlace txt={dep} bg={(DEPOSITOS[dep] || {}).color || P.muted} />
-              <span style={{ fontSize: 11, color: P.muted, flex: 1 }}>{t.series.join(" y ")}</span>
+              <span style={{ fontSize: T.aux, color: P.muted, flex: 1 }}>{t.series.join(" y ")}</span>
               {dentro.length > 0 && (
-                <span style={{ fontSize: 11, fontWeight: 700, color: ROJO }}>
+                <span style={{ fontSize: T.aux, fontWeight: 700, color: ROJO }}>
                   {dentro.length} dentro {desplegado ? "▲" : "▼"}
                 </span>
               )}
-              <span style={{ fontSize: 11.5, fontWeight: 700, color: libres - reservadas > 0 ? P.ok : P.alert }}>
+              <span style={{ fontSize: T.aux, fontWeight: 700, color: libres - reservadas > 0 ? P.ok : P.alert }}>
                 {Math.max(0, libres - reservadas)} libres
               </span>
             </div>
-            <div style={{ display: "flex", height: 7, borderRadius: 4, overflow: "hidden", marginTop: 7, background: P.sunken }}>
+            <div style={{ display: "flex", height: 7, borderRadius: R.menudo, overflow: "hidden", marginTop: 8, background: P.sunken }}>
               {Array.from({ length: t.plazas }).map((_, k) => (
                 <div
                   key={k}
@@ -7441,24 +7787,24 @@ function Taller({ g, setG, verUnidad, abierto, setAbierto, setGestion }) {
             </div>
 
             {desplegado && (
-              <div style={{ marginTop: 9, borderTop: `1px solid ${P.sunken}`, paddingTop: 7 }}>
+              <div style={{ marginTop: 8, borderTop: `1px solid ${P.sunken}`, paddingTop: 8 }}>
                 {dentro.map(([uid, v], k) => {
                   const cu = CATALOGO.find((x) => x.id === uid);
                   const parcial = REVISIONES[v.tipo].quita * ((REVISIONES[v.tipo].turnos - v.restan) / REVISIONES[v.tipo].turnos);
                   return (
-                    <div key={uid} style={{ padding: "7px 10px", margin: "0 -12px", borderRadius: 6, background: fondoFila(k) }}>
+                    <div key={uid} style={{ padding: "7px 10px", margin: "0 -12px", borderRadius: R.normal, background: fondoFila(k) }}>
                       <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-                        <span style={{ fontSize: 12.5, fontWeight: 700, fontFamily: "ui-monospace, monospace", flexShrink: 0 }}>{uid}</span>
+                        <span style={{ fontSize: T.base, fontWeight: 700, fontFamily: MONO, flexShrink: 0 }}>{uid}</span>
                         {cu && cu.deposito !== dep && <Enlace txt={cu.deposito} bg={(DEPOSITOS[cu.deposito] || {}).color || P.muted} />}
-                        <span style={{ fontSize: 11, color: P.muted, flex: 1, textAlign: "right", minWidth: 0, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
+                        <span style={{ fontSize: T.aux, color: P.muted, flex: 1, textAlign: "right", minWidth: 0, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
                           {REVISIONES[v.tipo].n}
                         </span>
-                        <span style={{ fontSize: 11, fontWeight: 700, color: v.restan > 0 ? P.warn : P.ok, flexShrink: 0 }}>
+                        <span style={{ fontSize: T.aux, fontWeight: 700, color: v.restan > 0 ? P.warn : P.ok, flexShrink: 0 }}>
                           {v.restan > 0 ? `${v.restan} turno${v.restan === 1 ? "" : "s"}` : "lista"}
                         </span>
                       </div>
-                      <div style={{ display: "flex", alignItems: "center", gap: 8, marginTop: 5 }}>
-                        <span style={{ fontSize: 10.5, color: P.muted, flex: 1 }}>
+                      <div style={{ display: "flex", alignItems: "center", gap: 8, marginTop: 4 }}>
+                        <span style={{ fontSize: T.menor, color: P.muted, flex: 1 }}>
                           {v.restan > 0
                             ? `Si sale ahora: ${Math.round(v.entrada)}% → ${Math.round(Math.max(0, v.entrada - parcial))}%`
                             : `${Math.round(v.entrada)}% → ${Math.round(Math.max(0, v.entrada - REVISIONES[v.tipo].quita))}%`}
@@ -7470,11 +7816,11 @@ function Taller({ g, setG, verUnidad, abierto, setAbierto, setGestion }) {
                           }}
                           style={{
                             background: v.restan > 0 ? P.surface : P.ok,
-                            color: v.restan > 0 ? P.warn : "#fff",
+                            color: v.restan > 0 ? P.warn : P.blanco,
                             border: `1px solid ${v.restan > 0 ? P.warn : P.ok}`,
-                            borderRadius: 6,
+                            borderRadius: R.normal,
                             padding: "4px 10px",
-                            fontSize: 11,
+                            fontSize: T.aux,
                             fontWeight: 700,
                             fontFamily: "inherit",
                             cursor: "pointer",
@@ -7496,7 +7842,7 @@ function Taller({ g, setG, verUnidad, abierto, setAbierto, setGestion }) {
       {/* ── flota, solo consulta ── */}
       <button
         onClick={() => setVerFlota(!verFlota)}
-        style={{ width: "100%", background: P.surface, border: `1px solid ${P.rule}`, borderRadius: 9, padding: 11, marginTop: 8, fontFamily: "inherit", fontSize: 13, fontWeight: 600, cursor: "pointer", color: P.ink }}
+        style={{ width: "100%", background: P.surface, border: `1px solid ${P.rule}`, borderRadius: R.normal, padding: 12, marginTop: 8, fontFamily: "inherit", fontSize: T.base, fontWeight: 600, cursor: "pointer", color: P.ink }}
       >
         {verFlota ? "Ocultar" : "Ver"} flota completa · {nf(CATALOGO.length)} unidades
       </button>
@@ -7507,14 +7853,14 @@ function Taller({ g, setG, verUnidad, abierto, setAbierto, setGestion }) {
           if (!uds.length) return null;
           const abierta = abierto === dep;
           return (
-            <div key={dep} style={{ ...ST.card, padding: 12, marginTop: 6 }}>
+            <div key={dep} style={{ ...ST.card, padding: 12, marginTop: 8 }}>
               <button onClick={() => setAbierto(abierta ? null : dep)} style={{ all: "unset", display: "flex", alignItems: "center", gap: 8, width: "100%", cursor: "pointer" }}>
                 <Enlace txt={dep} bg={(DEPOSITOS[dep] || {}).color || P.muted} />
-                <span style={{ fontSize: 11.5, color: P.muted, flex: 1 }}>{uds.length} unidades</span>
-                <span style={{ fontSize: 11.5, color: P.muted }}>{abierta ? "▲" : "▼"}</span>
+                <span style={{ fontSize: T.aux, color: P.muted, flex: 1 }}>{uds.length} unidades</span>
+                <span style={{ fontSize: T.aux, color: P.muted }}>{abierta ? "▲" : "▼"}</span>
               </button>
               {abierta && (
-                <div style={{ marginTop: 8, borderTop: `1px solid ${P.sunken}`, paddingTop: 6 }}>
+                <div style={{ marginTop: 8, borderTop: `1px solid ${P.sunken}`, paddingTop: 8 }}>
                   {uds.map((u0, k) => {
                     const dv = desgasteDe(g, u0.id);
                     const est = estadoUnidad(g, u0.id);
@@ -7522,13 +7868,13 @@ function Taller({ g, setG, verUnidad, abierto, setAbierto, setGestion }) {
                       <div
                         key={u0.id}
                         onClick={() => verUnidad(u0.id)}
-                        style={{ display: "flex", alignItems: "center", gap: 8, padding: "6px 10px", margin: "0 -12px", borderRadius: 6, background: fondoFila(k), cursor: "pointer" }}
+                        style={{ display: "flex", alignItems: "center", gap: 8, padding: "6px 10px", margin: "0 -12px", borderRadius: R.normal, background: fondoFila(k), cursor: "pointer" }}
                       >
-                        <span style={{ fontSize: 12.5, fontWeight: 700, fontFamily: "ui-monospace, monospace", width: 62, flexShrink: 0 }}>{u0.id}</span>
-                        <span style={{ fontSize: 11.5, fontFamily: "ui-monospace, monospace", width: 40, color: dv >= 85 ? P.alert : dv >= 60 ? P.warn : P.muted, flexShrink: 0 }}>
+                        <span style={{ fontSize: T.base, fontWeight: 700, fontFamily: MONO, width: 62, flexShrink: 0 }}>{u0.id}</span>
+                        <span style={{ fontSize: T.aux, fontFamily: MONO, width: 40, color: colDesgaste(dv), flexShrink: 0 }}>
                           {Math.round(dv)}%
                         </span>
-                        <span style={{ fontSize: 10.5, fontWeight: 700, color: est.c, flex: 1, textAlign: "right", minWidth: 0, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
+                        <span style={{ fontSize: T.menor, fontWeight: 700, color: est.c, flex: 1, textAlign: "right", minWidth: 0, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
                           {est.corto}
                         </span>
                       </div>
@@ -7544,6 +7890,7 @@ function Taller({ g, setG, verUnidad, abierto, setAbierto, setGestion }) {
 }
 
 function PerfilUnidad({ g, id, close, volverA, volver, verTaller, gestionar }) {
+  const arrastre = useCerrarArrastrando(close); // antes de cualquier return
   const cat = CATALOGO.find((u) => u.id === id);
   if (!cat) return null;
   // el estado vivo está en el tren o en el apartadero; si no, es del catálogo
@@ -7563,7 +7910,7 @@ function PerfilUnidad({ g, id, close, volverA, volver, verTaller, gestionar }) {
   const pareja = tren ? tren.unidades.filter((x) => x.id !== id) : lote ? lote.unidades.filter((x) => x.id !== id) : [];
   // las marchas reales del tren que lleva esta unidad, no las teóricas
   const marchas = tren ? tren.marchas || [] : [];
-  const enCursoU = tren ? marchaActual(tren) : null;
+  const enCursoU = tren ? marchaEnCurso(tren) : null;
 
   const situacionTxt = tren
     ? `En servicio · circulación ${tren.i}`
@@ -7590,47 +7937,52 @@ function PerfilUnidad({ g, id, close, volverA, volver, verTaller, gestionar }) {
   ];
 
   return (
-    <div onClick={close} style={{ position: "fixed", inset: 0, background: "rgba(10,14,17,.45)", display: "flex", alignItems: "flex-end", justifyContent: "center", zIndex: 68 }}>
-      <div onClick={(ev) => ev.stopPropagation()} style={{ background: P.surface, width: "100%", maxWidth: 540, maxHeight: "88vh", overflowY: "auto", borderRadius: "16px 16px 0 0", padding: 16 }}>
+    <div onClick={close} style={{ position: "fixed", inset: 0, background: "rgba(10,14,17,.45)", animation: "cgo-fondo .18s ease-out", display: "flex", alignItems: "flex-end", justifyContent: "center", zIndex: 68 }}>
+      <div
+        onClick={(ev) => ev.stopPropagation()}
+        {...arrastre}
+        style={{ background: P.surface, width: "100%", maxWidth: 540, maxHeight: "88vh", overflowY: "auto", borderRadius: `${R.grande + 2}px ${R.grande + 2}px 0 0`, padding: 16, boxShadow: SOMBRA.hoja, animation: "cgo-hoja .22s ease-out", ...arrastre.style }}
+      >
+        <Asa />
         {volverA && (
-          <button onClick={volver} style={{ all: "unset", cursor: "pointer", display: "inline-flex", alignItems: "center", gap: 5, fontSize: 12.5, fontWeight: 600, color: P.muted, marginBottom: 8 }}>
+          <button onClick={volver} style={{ all: "unset", cursor: "pointer", display: "inline-flex", alignItems: "center", gap: 4, fontSize: T.base, fontWeight: 600, color: P.muted, marginBottom: 8 }}>
             ‹ Volver a {volverA.nombre}
           </button>
         )}
         <div style={ST.eyebrow}>Material rodante</div>
-        <div style={{ display: "flex", alignItems: "center", gap: 9, margin: "3px 0 2px" }}>
-          <span style={{ fontSize: 28, fontWeight: 700, fontFamily: "ui-monospace, monospace", letterSpacing: -1 }}>{u.id}</span>
+        <div style={{ display: "flex", alignItems: "center", gap: 8, margin: "3px 0 2px" }}>
+          <span style={{ fontSize: T.cabecera, fontWeight: 700, fontFamily: MONO, letterSpacing: -1 }}>{u.id}</span>
           {u.reformada && <Etiqueta txt="Reformada" c={P.ok} />}
         </div>
-        <div style={{ fontSize: 13.5, fontWeight: 600, color: lote && lote.averiado ? P.alert : P.muted, marginBottom: 14 }}>{situacionTxt}</div>
+        <div style={{ fontSize: T.base, fontWeight: 600, color: lote && lote.averiado ? P.alert : P.muted, marginBottom: 16 }}>{situacionTxt}</div>
 
         <Bloque titulo="Ficha técnica">
           {filas.map(([k, v], n) => (
-            <div key={k} style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", padding: "6px 10px", margin: "0 -12px", borderRadius: 6, background: fondoFila(n), fontSize: 12.5 }}>
+            <div key={k} style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", padding: "6px 10px", margin: "0 -12px", borderRadius: R.normal, background: fondoFila(n), fontSize: T.base }}>
               <span style={{ color: P.muted }}>{k}</span>
-              <span style={{ fontWeight: 600, fontFamily: typeof v === "string" ? "ui-monospace, monospace" : "inherit" }}>{v}</span>
+              <span style={{ fontWeight: 600, fontFamily: typeof v === "string" ? MONO : "inherit" }}>{v}</span>
             </div>
           ))}
         </Bloque>
 
         <Bloque titulo="Estado">
           <div style={{ padding: "6px 0" }}>
-            <div style={{ display: "flex", justifyContent: "space-between", fontSize: 12.5, marginBottom: 5 }}>
+            <div style={{ display: "flex", justifyContent: "space-between", fontSize: T.base, marginBottom: 4 }}>
               <span style={{ color: P.muted }}>Fiabilidad</span>
-              <span style={{ fontWeight: 700, fontFamily: "ui-monospace, monospace", color: u.fiab >= 0.97 ? P.ok : u.fiab >= 0.945 ? P.warn : P.alert }}>
+              <span style={{ fontWeight: 700, fontFamily: MONO, color: u.fiab >= 0.97 ? P.ok : u.fiab >= 0.945 ? P.warn : P.alert }}>
                 {Math.round(u.fiab * 100)} %
               </span>
             </div>
-            <div style={{ height: 5, background: P.sunken, borderRadius: 3, overflow: "hidden", marginBottom: 12 }}>
+            <div style={{ height: 5, background: P.sunken, borderRadius: R.menudo, overflow: "hidden", marginBottom: 12 }}>
               <div style={{ width: `${u.fiab * 100}%`, height: "100%", background: u.fiab >= 0.97 ? P.ok : u.fiab >= 0.945 ? P.warn : P.alert }} />
             </div>
-            <div style={{ display: "flex", justifyContent: "space-between", fontSize: 12.5, marginBottom: 5 }}>
+            <div style={{ display: "flex", justifyContent: "space-between", fontSize: T.base, marginBottom: 4 }}>
               <span style={{ color: P.muted }}>Desgaste</span>
-              <span style={{ fontWeight: 700, fontFamily: "ui-monospace, monospace", color: !cubreTurno(u) ? P.alert : turnosRestantes(u) < 2 ? P.warn : P.ink }}>
+              <span style={{ fontWeight: 700, fontFamily: MONO, color: !cubreTurno(u) ? P.alert : turnosRestantes(u) < 2 ? P.warn : P.ink }}>
                 {Math.round(u.desgaste)} %
               </span>
             </div>
-            <div style={{ fontSize: 11.5, color: P.muted }}>
+            <div style={{ fontSize: T.aux, color: P.muted }}>
               {cubreTurno(u)
                 ? `Le quedan ${turnosRestantes(u).toFixed(1)} turnos · ${tasaDesgaste(u)} pts por cada 100 km`
                 : `No cubre el turno completo: agotaría el ciclo`}
@@ -7639,19 +7991,19 @@ function PerfilUnidad({ g, id, close, volverA, volver, verTaller, gestionar }) {
         </Bloque>
 
         <Bloque titulo="Acoplamiento">
-          <div style={{ padding: "6px 0", fontSize: 12.5 }}>
+          <div style={{ padding: "6px 0", fontSize: T.base }}>
             {pareja.length === 0 ? (
               <span style={{ color: P.muted }}>{SERIES[u.serie].doble ? "Sin acoplar" : "Composición simple: circula sola"}</span>
             ) : (
               pareja.map((x) => (
                 <div key={x.id} style={{ display: "flex", justifyContent: "space-between", padding: "3px 0" }}>
-                  <span style={{ fontFamily: "ui-monospace, monospace", fontWeight: 700 }}>{x.id}</span>
+                  <span style={{ fontFamily: MONO, fontWeight: 700 }}>{x.id}</span>
                   <span style={{ color: P.muted }}>{nf(x.plazas)} plazas · fiab. {Math.round(x.fiab * 100)} %</span>
                 </div>
               ))
             )}
             {tren && (
-              <div style={{ marginTop: 7, paddingTop: 7, borderTop: `1px solid ${P.sunken}`, color: P.muted }}>
+              <div style={{ marginTop: 8, paddingTop: 8, borderTop: `1px solid ${P.sunken}`, color: P.muted }}>
                 Oferta conjunta del tren: {nf(plazasDe(tren))} plazas
               </div>
             )}
@@ -7659,26 +8011,25 @@ function PerfilUnidad({ g, id, close, volverA, volver, verTaller, gestionar }) {
         </Bloque>
 
         <Bloque titulo="Trenes que hace hoy">
-          {marchas.length === 0 && <div style={{ fontSize: 12.5, color: P.muted, padding: "6px 0" }}>Sin servicio asignado en este turno.</div>}
+          {marchas.length === 0 && <div style={{ fontSize: T.base, color: P.muted, padding: "6px 0" }}>Sin servicio asignado en este turno.</div>}
           {marchas.map((x, k) => {
             const enCurso = enCursoU === x;
-            const pasada = x.real;
-            // una vez terminada manda lo que pasó de verdad
-            const desde = x.desde;
-            const hasta = x.real && x.hastaReal ? x.hastaReal : x.hasta;
-            const hIni = x.inicioReal !== undefined ? x.inicioReal : x.ini;
-            const hFin = x.real && x.finReal !== undefined ? x.finReal : x.fin;
-            const tarde = x.real && x.finReal !== undefined && x.finReal - x.fin > 2;
+            const pasada = x.estado === "hecha";
+              const desde = x.desde;
+            const hasta = pasada && x.hastaReal ? x.hastaReal : x.hasta;
+            const hIni = x.iniReal !== undefined ? x.iniReal : x.ini;
+            const hFin = pasada && x.finReal !== undefined ? x.finReal : x.fin;
+            const tarde = pasada && x.finReal !== undefined && x.finReal - x.fin > 2;
             return (
-              <div key={k} style={{ display: "flex", alignItems: "center", gap: 8, padding: "7px 10px", margin: "0 -12px", borderRadius: 6, background: fondoFila(k), opacity: pasada ? 0.45 : 1 }}>
-                <span style={{ fontSize: 12, fontWeight: 700, fontFamily: "ui-monospace, monospace", color: "#fff", background: enCurso ? ROJO : x.real ? P.ink : P.muted, borderRadius: 4, padding: "1px 6px", flexShrink: 0 }}>
+              <div key={k} style={{ display: "flex", alignItems: "center", gap: 8, padding: "7px 10px", margin: "0 -12px", borderRadius: R.normal, background: fondoFila(k), opacity: pasada ? 0.45 : 1 }}>
+                <span style={{ fontSize: T.aux, fontWeight: 700, fontFamily: MONO, color: P.blanco, background: enCurso ? ROJO : pasada ? P.ink : P.muted, borderRadius: R.menudo, padding: "1px 6px", flexShrink: 0 }}>
                   {x.num}
                 </span>
-                <span style={{ fontSize: 12.5, flex: 1, minWidth: 0, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
+                <span style={{ fontSize: T.base, flex: 1, minWidth: 0, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis", lineHeight: "17px" }}>
                   {desde} → {hasta}
                   {x.motivo && <span style={{ color: P.warn, fontWeight: 600 }}> · {x.motivo}</span>}
                 </span>
-                <span style={{ fontSize: 12, color: P.muted, fontFamily: "ui-monospace, monospace", flexShrink: 0 }}>
+                <span style={{ fontSize: T.aux, color: P.muted, fontFamily: MONO, flexShrink: 0 }}>
                   <span style={{ color: tarde ? P.warn : "inherit" }}>
                     {hhmm(hIni)} – {hhmm(hFin)}
                   </span>
@@ -7691,12 +8042,12 @@ function PerfilUnidad({ g, id, close, volverA, volver, verTaller, gestionar }) {
         {gestionar && (
           <button
             onClick={() => gestionar(id)}
-            style={{ width: "100%", background: P.surface, color: P.ink, border: `1px solid ${g.taller[id] ? P.warn : P.rule}`, borderRadius: 9, padding: 13, fontFamily: "inherit", fontWeight: 600, fontSize: 14, cursor: "pointer", marginBottom: 8 }}
+            style={{ width: "100%", background: P.surface, color: P.ink, border: `1px solid ${g.taller[id] ? P.warn : P.rule}`, borderRadius: R.normal, padding: 12, fontFamily: "inherit", fontWeight: 600, fontSize: T.alto, cursor: "pointer", marginBottom: 8 }}
           >
             {g.taller[id] ? "Gestionar salida de taller" : "Enviar a taller"}
           </button>
         )}
-        <button onClick={close} style={{ width: "100%", background: P.sunken, border: `1px solid ${P.rule}`, borderRadius: 9, padding: 12, fontFamily: "inherit", fontWeight: 600, fontSize: 14, cursor: "pointer", color: P.ink }}>
+        <button onClick={close} style={{ width: "100%", background: P.sunken, border: `1px solid ${P.rule}`, borderRadius: R.normal, padding: 12, fontFamily: "inherit", fontWeight: 600, fontSize: T.alto, cursor: "pointer", color: P.ink }}>
           Cerrar
         </button>
       </div>
@@ -7706,6 +8057,7 @@ function PerfilUnidad({ g, id, close, volverA, volver, verTaller, gestionar }) {
 
 function PerfilTren({ g, i, close, setRotarDe, setApartarDe, setSuprimirDe, setReponerDe, volverA, volver, verUnidad }) {
   const [infoAtr, setInfoAtr] = useState(null); // antes de cualquier return
+  const arrastre = useCerrarArrastrando(close);
   const t = g.trenes.find((x) => x.i === i);
   if (!t) return null;
   const sit = situacion(t, g.reloj);
@@ -7718,7 +8070,7 @@ function PerfilTren({ g, i, close, setRotarDe, setApartarDe, setSuprimirDe, setR
      que le queda por hacer según el cuadro. Si rota antes o se retira, la
      marcha real se cierra donde toque y no donde estaba previsto.       */
   const marchas = t.marchas || [];
-  const enCursoM = marchaActual(t);
+  const enCursoM = marchaEnCurso(t);
 
 
   const estadoTxt = supr
@@ -7734,64 +8086,69 @@ function PerfilTren({ g, i, close, setRotarDe, setApartarDe, setSuprimirDe, setR
     : describir(sit);
 
   return (
-    <div onClick={close} style={{ position: "fixed", inset: 0, background: "rgba(10,14,17,.45)", display: "flex", alignItems: "flex-end", justifyContent: "center", zIndex: 66 }}>
-      <div onClick={(ev) => ev.stopPropagation()} style={{ background: P.surface, width: "100%", maxWidth: 540, maxHeight: "88vh", overflowY: "auto", borderRadius: "16px 16px 0 0", padding: 16 }}>
+    <div onClick={close} style={{ position: "fixed", inset: 0, background: "rgba(10,14,17,.45)", animation: "cgo-fondo .18s ease-out", display: "flex", alignItems: "flex-end", justifyContent: "center", zIndex: 66 }}>
+      <div
+        onClick={(ev) => ev.stopPropagation()}
+        {...arrastre}
+        style={{ background: P.surface, width: "100%", maxWidth: 540, maxHeight: "88vh", overflowY: "auto", borderRadius: `${R.grande + 2}px ${R.grande + 2}px 0 0`, padding: 16, boxShadow: SOMBRA.hoja, animation: "cgo-hoja .22s ease-out", ...arrastre.style }}
+      >
+        <Asa />
         {volverA && (
           <button
             onClick={volver}
-            style={{ all: "unset", cursor: "pointer", display: "inline-flex", alignItems: "center", gap: 5, fontSize: 12.5, fontWeight: 600, color: P.muted, marginBottom: 8 }}
+            style={{ all: "unset", cursor: "pointer", display: "inline-flex", alignItems: "center", gap: 4, fontSize: T.base, fontWeight: 600, color: P.muted, marginBottom: 8 }}
           >
             ‹ Volver a {volverA.nombre}
           </button>
         )}
         <div style={ST.eyebrow}>Circulación {t.i}</div>
-        <div style={{ display: "flex", alignItems: "center", gap: 9, marginBottom: 2 }}>
+        <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 2 }}>
           <span
             style={{
-              fontSize: 13,
+              fontSize: T.base,
               fontWeight: 700,
-              color: "#fff",
+              color: P.blanco,
               // el material en vacío no presta servicio en ninguna línea
               background: t.esVacio ? P.ink : LIN[LINEA],
-              borderRadius: 5,
+              borderRadius: R.menudo,
               // mismo tamaño exacto que la pastilla de la línea, aunque "MV"
               // ocupe menos: si no, el número de tren bailaba de sitio
               padding: "2px 0",
               minWidth: 34,
               textAlign: "center",
-              fontFamily: "ui-monospace, monospace",
+              fontFamily: MONO,
               flexShrink: 0,
             }}
           >
             {t.esVacio ? "MV" : LINEA}
           </span>
-          <span style={{ fontSize: 30, fontWeight: 700, fontFamily: "ui-monospace, monospace", letterSpacing: -1 }}>{numeroTren(t, g.reloj)}</span>
-          <span style={{ fontSize: 20, fontWeight: 700, fontFamily: "ui-monospace, monospace", color: colRetraso(retrasoEfectivo(t)) }}>
+          <span style={{ fontSize: T.cabecera, fontWeight: 700, fontFamily: MONO, letterSpacing: -1 }}>{numeroTren(t, g.reloj)}</span>
+          <span style={{ fontSize: T.titulo, fontWeight: 700, fontFamily: MONO, color: colRetraso(retrasoEfectivo(t)) }}>
             {supr ? "—" : retTxt(retrasoEfectivo(t))}
           </span>
         </div>
-        <div style={{ fontSize: 14, fontWeight: 600, marginBottom: 14 }}>{estadoTxt}</div>
+        <div style={{ fontSize: T.alto, fontWeight: 600, marginBottom: 16 }}>{estadoTxt}</div>
 
         <Bloque titulo="Composición">
           <div style={{ padding: "6px 0" }}>
-            {t.unidades.length === 0 && <div style={{ fontSize: 12.5, color: P.muted }}>Sin material.</div>}
+            {t.unidades.length === 0 && <div style={{ fontSize: T.base, color: P.muted }}>Sin material.</div>}
             {t.unidades.map((u, ku) => (
-              <div key={u.id} onClick={() => verUnidad && verUnidad(u.id)} style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", padding: "6px 10px", margin: "0 -12px", borderRadius: 6, background: fondoFila(ku), fontSize: 12.5, cursor: verUnidad ? "pointer" : "default" }}>
-                <span style={{ fontFamily: "ui-monospace, monospace", fontWeight: 700, borderBottom: verUnidad ? `1px dotted ${P.rule}` : "none" }}>{u.id}</span>
-                <span style={{ color: P.muted, fontSize: 11.5 }}>
+              <div key={u.id} onClick={() => verUnidad && verUnidad(u.id)} style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", padding: "6px 10px", margin: "0 -12px", borderRadius: R.normal, background: fondoFila(ku), fontSize: T.base, cursor: verUnidad ? "pointer" : "default" }}>
+                <span style={{ fontFamily: MONO, fontWeight: 700, borderBottom: verUnidad ? `1px dotted ${P.rule}` : "none" }}>{u.id}</span>
+                <span style={{ color: P.muted, fontSize: T.aux }}>
                   {nf(u.plazas)} pl · fiab {Math.round(u.fiab * 100)}% · desgaste {Math.round(u.desgaste)} %
                 </span>
               </div>
             ))}
-            <div style={{ borderTop: `1px solid ${P.sunken}`, marginTop: 7, paddingTop: 8 }}>
-              <div style={{ display: "flex", justifyContent: "space-between", fontSize: 11.5, color: P.muted, marginBottom: 4 }}>
+            <div style={{ borderTop: `1px solid ${P.sunken}`, marginTop: 8, paddingTop: 8 }}>
+              <div style={{ display: "flex", justifyContent: "space-between", fontSize: T.aux, color: P.muted, marginBottom: 4 }}>
                 <span>Ocupación</span>
-                <span style={{ fontFamily: "ui-monospace, monospace", fontWeight: 700, color: oc > 92 ? P.alert : oc > 70 ? P.warn : P.ok }}>
+                <span style={{ fontFamily: MONO, fontWeight: 700, color: colOcupacion(oc) }}>
                   {nf(aBordo)} / {nf(cap)} · {Math.round(oc)}%
                 </span>
               </div>
-              <div style={{ height: 6, background: P.sunken, borderRadius: 3, overflow: "hidden" }}>
-                <div style={{ width: `${oc}%`, height: "100%", background: oc > 92 ? P.alert : oc > 70 ? P.warn : P.ok }} />
+              <div style={{ height: 6, background: P.sunken, borderRadius: R.menudo, overflow: "hidden" }}>
+                <div style={{ width: `${oc}%`, height: "100%", background: colOcupacion(oc) }} />
               </div>
             </div>
           </div>
@@ -7800,19 +8157,19 @@ function PerfilTren({ g, i, close, setRotarDe, setApartarDe, setSuprimirDe, setR
         {m && (
           <Bloque titulo="Conducción">
             <div style={{ padding: "6px 0" }}>
-              <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 5 }}>
-                <span style={{ fontSize: 14, fontWeight: 600 }}>{m.nombre}</span>
+              <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 4 }}>
+                <span style={{ fontSize: T.alto, fontWeight: 600 }}>{m.nombre}</span>
                 <Media m={m} />
               </div>
-              <div style={{ fontSize: 12, color: P.muted }}>
+              <div style={{ fontSize: T.aux, color: P.muted }}>
                 {dur(m.cond)} de conducción continua · jornada {dur(m.jornada)}
               </div>
-              <div style={{ fontSize: 12, color: t.excesoAutorizado ? P.alert : P.muted, marginTop: 3 }}>
+              <div style={{ fontSize: T.aux, color: t.excesoAutorizado ? P.alert : P.muted, marginTop: 4 }}>
                 {t.excesoAutorizado ? "Conduciendo por encima del límite" : t.relevo ? `Relevo previsto ${hhmm(t.relevo.prevista)} en ${t.relevo.cab}` : "Sin relevo en el turno"}
               </div>
               <Atributos m={m} onInfo={(k) => setInfoAtr((x) => (x === k ? null : k))} />
               {infoAtr && (
-                <div style={{ marginTop: 8, background: P.sunken, borderRadius: 8, padding: "9px 11px", fontSize: 12, color: P.muted, lineHeight: 1.45 }}>
+                <div style={{ marginTop: 8, background: P.sunken, borderRadius: R.normal, padding: "9px 11px", fontSize: T.aux, color: P.muted, lineHeight: 1.45 }}>
                   <strong style={{ color: P.ink }}>{INFO_ATRIB[infoAtr].n}</strong>: {INFO_ATRIB[infoAtr].t}
                 </div>
               )}
@@ -7823,35 +8180,35 @@ function PerfilTren({ g, i, close, setRotarDe, setApartarDe, setSuprimirDe, setR
         <Bloque titulo="Histórico de retraso">
           <div style={{ padding: "4px 0" }}>
             {t.hist.length === 0 && t.acum.paradas < 0.5 && (t.acum.bloqueo || 0) < 0.5 && Math.abs(t.acum.maquinista) < 0.5 && (
-              <div style={{ fontSize: 12.5, color: P.muted }}>Sin incidencias. Marcha conforme al horario.</div>
+              <div style={{ fontSize: T.base, color: P.muted }}>Sin incidencias. Marcha conforme al horario.</div>
             )}
             {t.hist.map((h, k) => (
-              <div key={k} style={{ display: "flex", gap: 8, alignItems: "baseline", padding: "5px 10px", margin: "0 -12px", borderRadius: 6, background: fondoFila(k), fontSize: 12.5 }}>
-                <span style={{ color: P.muted, fontFamily: "ui-monospace, monospace", flexShrink: 0 }}>{hhmm(h.m)}</span>
+              <div key={k} style={{ display: "flex", gap: 8, alignItems: "baseline", padding: "5px 10px", margin: "0 -12px", borderRadius: R.normal, background: fondoFila(k), fontSize: T.base }}>
+                <span style={{ color: P.muted, fontFamily: MONO, flexShrink: 0 }}>{hhmm(h.m)}</span>
                 <span style={{ flex: 1, minWidth: 0 }}>{h.txt}</span>
-                <span style={{ fontFamily: "ui-monospace, monospace", fontWeight: 700, color: h.min > 0 ? P.alert : P.ok, flexShrink: 0 }}>
+                <span style={{ fontFamily: MONO, fontWeight: 700, color: h.min > 0 ? P.alert : P.ok, flexShrink: 0 }}>
                   {h.min > 0 ? `+${Math.round(h.min)}` : Math.round(h.min)}′
                 </span>
               </div>
             ))}
             {(t.acum.paradas >= 0.5 || (t.acum.bloqueo || 0) >= 0.5 || Math.abs(t.acum.maquinista) >= 0.5) && (
-              <div style={{ borderTop: `1px solid ${P.sunken}`, marginTop: 6, paddingTop: 7 }}>
+              <div style={{ borderTop: `1px solid ${P.sunken}`, marginTop: 8, paddingTop: 8 }}>
                 {t.acum.paradas >= 0.5 && (
-                  <div style={{ display: "flex", justifyContent: "space-between", fontSize: 12.5, padding: "2px 0" }}>
+                  <div style={{ display: "flex", justifyContent: "space-between", fontSize: T.base, padding: "2px 0" }}>
                     <span style={{ color: P.muted }}>Exceso de tiempo de parada</span>
-                    <span style={{ fontFamily: "ui-monospace, monospace", fontWeight: 700, color: P.alert }}>+{Math.round(t.acum.paradas)}′</span>
+                    <span style={{ fontFamily: MONO, fontWeight: 700, color: P.alert }}>+{Math.round(t.acum.paradas)}′</span>
                   </div>
                 )}
                 {(t.acum.bloqueo || 0) >= 0.5 && (
-                  <div style={{ display: "flex", justifyContent: "space-between", fontSize: 12.5, padding: "2px 0" }}>
+                  <div style={{ display: "flex", justifyContent: "space-between", fontSize: T.base, padding: "2px 0" }}>
                     <span style={{ color: P.muted }}>Marcha condicionada por el tren de delante</span>
-                    <span style={{ fontFamily: "ui-monospace, monospace", fontWeight: 700, color: P.alert }}>+{Math.round(t.acum.bloqueo)}′</span>
+                    <span style={{ fontFamily: MONO, fontWeight: 700, color: P.alert }}>+{Math.round(t.acum.bloqueo)}′</span>
                   </div>
                 )}
                 {Math.abs(t.acum.maquinista) >= 0.5 && (
-                  <div style={{ display: "flex", justifyContent: "space-between", fontSize: 12.5, padding: "2px 0" }}>
+                  <div style={{ display: "flex", justifyContent: "space-between", fontSize: T.base, padding: "2px 0" }}>
                     <span style={{ color: P.muted }}>Marcha de {m ? m.nombre : "el maquinista"}</span>
-                    <span style={{ fontFamily: "ui-monospace, monospace", fontWeight: 700, color: t.acum.maquinista > 0 ? P.alert : P.ok }}>
+                    <span style={{ fontFamily: MONO, fontWeight: 700, color: t.acum.maquinista > 0 ? P.alert : P.ok }}>
                       {t.acum.maquinista > 0 ? "+" : ""}
                       {Math.round(t.acum.maquinista)}′
                     </span>
@@ -7864,14 +8221,14 @@ function PerfilTren({ g, i, close, setRotarDe, setApartarDe, setSuprimirDe, setR
 
         <Bloque titulo="Rotación del día">
           {marchas.map((x, k) => {
-            const enCurso = enCursoM === x;
-            const pasada = x.real;
-            // una vez terminada manda lo que pasó de verdad
+            // previsión hasta que termina; después, lo que de verdad pasó
+            const enCurso = x.estado === "curso";
+            const pasada = x.estado === "hecha";
             const desde = x.desde;
-            const hasta = x.real && x.hastaReal ? x.hastaReal : x.hasta;
-            const hIni = x.inicioReal !== undefined ? x.inicioReal : x.ini;
-            const hFin = x.real && x.finReal !== undefined ? x.finReal : x.fin;
-            const tarde = x.real && x.finReal !== undefined && x.finReal - x.fin > 2;
+            const hasta = pasada && x.hastaReal ? x.hastaReal : x.hasta;
+            const hIni = x.iniReal !== undefined ? x.iniReal : x.ini;
+            const hFin = pasada && x.finReal !== undefined ? x.finReal : x.fin;
+            const tarde = pasada && x.finReal !== undefined && x.finReal - x.fin > 2;
             return (
               <div
                 key={k}
@@ -7884,20 +8241,20 @@ function PerfilTren({ g, i, close, setRotarDe, setApartarDe, setSuprimirDe, setR
                   margin: "0 -12px",
                   paddingLeft: 12,
                   paddingRight: 12,
-                  borderRadius: 6,
+                  borderRadius: R.normal,
                   opacity: pasada ? 0.5 : 1,
                   color: enCurso ? P.ink : "inherit",
                   fontWeight: enCurso ? 600 : 400,
                 }}
               >
-                <span style={{ fontSize: 12, fontWeight: 700, fontFamily: "ui-monospace, monospace", color: "#fff", background: enCurso ? ROJO : x.real ? P.ink : P.muted, borderRadius: 4, padding: "1px 6px", flexShrink: 0 }}>
+                <span style={{ fontSize: T.aux, fontWeight: 700, fontFamily: MONO, color: P.blanco, background: enCurso ? ROJO : pasada ? P.ink : P.muted, borderRadius: R.menudo, padding: "1px 6px", flexShrink: 0 }}>
                   {x.num}
                 </span>
-                <span style={{ fontSize: 12.5, flex: 1, minWidth: 0, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
+                <span style={{ fontSize: T.base, flex: 1, minWidth: 0, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis", lineHeight: "17px" }}>
                   {desde} → {hasta}
                   {x.motivo && <span style={{ color: P.warn, fontWeight: 600 }}> · {x.motivo}</span>}
                 </span>
-                <span style={{ fontSize: 12, color: P.muted, fontFamily: "ui-monospace, monospace", flexShrink: 0 }}>
+                <span style={{ fontSize: T.aux, color: P.muted, fontFamily: MONO, flexShrink: 0 }}>
                   <span style={{ color: tarde ? P.warn : "inherit" }}>
                     {hhmm(hIni)} – {hhmm(hFin)}
                   </span>
@@ -7927,7 +8284,7 @@ function PerfilTren({ g, i, close, setRotarDe, setApartarDe, setSuprimirDe, setR
         />
         <div style={{ height: 10 }} />
 
-        <button onClick={close} style={{ width: "100%", background: P.sunken, border: `1px solid ${P.rule}`, borderRadius: 9, padding: 12, fontFamily: "inherit", fontWeight: 600, fontSize: 14, cursor: "pointer", color: P.ink }}>
+        <button onClick={close} style={{ width: "100%", background: P.sunken, border: `1px solid ${P.rule}`, borderRadius: R.normal, padding: 12, fontFamily: "inherit", fontWeight: 600, fontSize: T.alto, cursor: "pointer", color: P.ink }}>
           Cerrar
         </button>
       </div>
@@ -7939,14 +8296,14 @@ function FilaVia({ g, tren, txt, col, fondo, onClick }) {
   return (
     <span
       onClick={onClick}
-      style={{ display: "flex", alignItems: "center", gap: 7, flex: 1, justifyContent: "flex-end", minWidth: 0, cursor: onClick ? "pointer" : "default" }}
+      style={{ display: "flex", alignItems: "center", gap: 8, flex: 1, justifyContent: "flex-end", minWidth: 0, cursor: onClick ? "pointer" : "default" }}
     >
-      <span style={{ fontSize: 11, color: P.muted, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", textAlign: "right" }}>
+      <span style={{ fontSize: T.aux, color: P.muted, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", textAlign: "right" }}>
         {tren.unidades.map((u) => u.id).join(" + ")}
         <br />
         <span style={{ color: col, fontWeight: 700 }}>{txt}</span>
       </span>
-      <span style={{ fontSize: 12, fontWeight: 700, fontFamily: "ui-monospace, monospace", color: "#fff", background: fondo, borderRadius: 4, padding: "1px 6px", flexShrink: 0 }}>
+      <span style={{ fontSize: T.aux, fontWeight: 700, fontFamily: MONO, color: P.blanco, background: fondo, borderRadius: R.menudo, padding: "1px 6px", flexShrink: 0 }}>
         {numeroTren(tren, g.reloj)}
       </span>
     </span>
@@ -7955,15 +8312,15 @@ function FilaVia({ g, tren, txt, col, fondo, onClick }) {
 
 function Bloque({ titulo, children }) {
   return (
-    <div style={{ marginBottom: 14 }}>
-      <div style={{ ...ST.eyebrow, marginBottom: 6 }}>{titulo}</div>
-      <div style={{ background: P.surface, border: `1px solid ${P.rule}`, borderRadius: 10, padding: "4px 12px 10px" }}>{children}</div>
+    <div style={{ marginBottom: 16 }}>
+      <div style={{ ...ST.eyebrow, marginBottom: 8 }}>{titulo}</div>
+      <div style={{ background: P.surface, border: `1px solid ${P.rule}`, borderRadius: R.grande, padding: "4px 12px 10px" }}>{children}</div>
     </div>
   );
 }
 
 function Enlace({ txt, bg }) {
-  return <span style={{ fontSize: 9, fontWeight: 700, color: "#fff", background: bg, borderRadius: 3, padding: "1px 4px", fontFamily: "ui-monospace, monospace", flexShrink: 0 }}>{txt}</span>;
+  return <span style={{ fontSize: T.micro, fontWeight: 700, color: P.blanco, background: bg, borderRadius: R.menudo, padding: "1px 4px", fontFamily: MONO, flexShrink: 0 }}>{txt}</span>;
 }
 
 function Libro({ g }) {
@@ -7974,14 +8331,14 @@ function Libro({ g }) {
 
   return (
     <div>
-      <div style={{ display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: 5, marginBottom: 6 }}>
-        <Kpi k="Punt." v={`${punt.toFixed(0)}%`} c={punt >= 92 ? P.ok : punt >= 75 ? P.warn : P.alert} small />
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: 4, marginBottom: 8 }}>
+        <Kpi k="Punt." v={`${punt.toFixed(0)}%`} c={colPuntualidad(punt)} small />
         <Kpi k="Retraso" v={`${retrasoMedio.toFixed(1)}′`} c={colRetrasoMedio(retrasoMedio)} small />
         <Kpi k="Circul." v={`${activos.length}/${CIRCULACIONES}`} c={activos.length === CIRCULACIONES ? P.ok : P.warn} small />
         <Kpi k="Andén" v={nf(enAnden)} c={enAnden > 4000 ? P.alert : P.ink} small />
       </div>
 
-      <div style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: 5, marginBottom: 10 }}>
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: 4, marginBottom: 12 }}>
         <Kpi k="Afectados" v={nf(g.kpi.afect)} c={g.kpi.afect > 6000 ? P.alert : P.ink} small />
         <Kpi k="Coste" v={`${(g.kpi.coste / 1000).toFixed(1)}k €`} c={P.ink} small />
         <Kpi k="Incid." v={String(g.incCount)} c={P.ink} small />
@@ -7989,8 +8346,8 @@ function Libro({ g }) {
 
       <div style={{ ...ST.card, padding: 12, maxHeight: 460, overflowY: "auto" }}>
       {[...g.log].reverse().map((l, i) => (
-        <div key={i} style={{ display: "flex", gap: 8, marginBottom: 5, fontSize: 12.5, lineHeight: 1.4 }}>
-          <span style={{ color: P.muted, fontFamily: "ui-monospace, monospace", flexShrink: 0 }}>{hhmm(l.m)}</span>
+        <div key={i} style={{ display: "flex", gap: 8, marginBottom: 4, fontSize: T.base, lineHeight: 1.4 }}>
+          <span style={{ color: P.muted, fontFamily: MONO, flexShrink: 0 }}>{hhmm(l.m)}</span>
           <span style={{ color: l.k === "bad" ? P.alert : l.k === "aviso" ? P.warn : l.k === "ok" ? P.ok : P.muted }}>{l.t}</span>
         </div>
       ))}
@@ -7999,8 +8356,41 @@ function Libro({ g }) {
   );
 }
 
-const colRetraso = (n) => (rt(n) === 0 ? P.ok : n <= 5 ? P.warn : P.alert);
-const colRetrasoMedio = (n) => (n <= 3 ? P.ok : n <= 8 ? P.warn : P.alert);
+/* Velocidades de la partida. La media velocidad sirve para los momentos en
+   que hay varias decisiones encima y el minuto se queda corto.           */
+const VELOCIDADES = [0.5, 1, 4, 10, 40];
+const velTxt = (v) => (v === 0.5 ? "0,5" : String(v));
+
+/* ── color con significado ──────────────────────────────────────
+   Verde, ámbar y rojo querían decir cosas distintas en cada pantalla: el
+   retraso de un tren se ponía ámbar a partir de 1 minuto y la media de la
+   línea a partir de 3. Ahora hay una sola definición de bien, regular y mal,
+   y todos los indicadores la usan.
+
+   El corte del retraso es el mismo que el de la puntualidad del juego: un
+   tren es puntual hasta los 5 minutos y medio.                          */
+const nivelCol = (v, bien, regular, alRevés = false) => {
+  const dentro = (x, lim) => (alRevés ? x >= lim : x <= lim);
+  if (dentro(v, bien)) return P.ok;
+  if (dentro(v, regular)) return P.warn;
+  return P.alert;
+};
+
+const UMBRAL = {
+  retraso: [5, 10], // minutos: puntual hasta 5, tolerable hasta 10
+  ocupacion: [70, 92], // por ciento de plazas
+  desgaste: [60, 85], // por ciento de ciclo consumido
+  puntualidad: [92, 75], // por ciento, al revés: más es mejor
+  jornada: [0.6, 0.85], // proporción de la jornada máxima
+  espera: [15, 30], // minutos que un tren lleva esperando
+  anden: [180, 400], // viajeros acumulados en un andén
+};
+
+const colRetraso = (n) => nivelCol(rt(n), ...UMBRAL.retraso);
+const colRetrasoMedio = (n) => nivelCol(n, ...UMBRAL.retraso);
+const colOcupacion = (pct) => nivelCol(pct, ...UMBRAL.ocupacion);
+const colDesgaste = (pct) => nivelCol(pct, ...UMBRAL.desgaste);
+const colPuntualidad = (pct) => nivelCol(pct, ...UMBRAL.puntualidad, true);
 const fondoFila = (k) => (k % 2 ? P.sunken : P.surface);
 const colAtrib = (v) => (v >= 70 ? P.ok : v >= 40 ? P.warn : P.alert);
 
@@ -8009,12 +8399,12 @@ function Media({ m }) {
   return (
     <span
       style={{
-        fontFamily: "ui-monospace, monospace",
-        fontSize: 11,
+        fontFamily: MONO,
+        fontSize: T.aux,
         fontWeight: 700,
-        color: "#fff",
+        color: P.blanco,
         background: colAtrib(v),
-        borderRadius: 4,
+        borderRadius: R.menudo,
         padding: "1px 5px",
         flexShrink: 0,
       }}
@@ -8045,7 +8435,7 @@ const INFO_ATRIB = {
 
 function Atributos({ m, onInfo }) {
   return (
-    <div style={{ display: "flex", gap: 6, marginTop: 7 }}>
+    <div style={{ display: "flex", gap: 8, marginTop: 8 }}>
       {["pun", "pro", "con"].map((k) => {
         const v = m[k];
         return (
@@ -8053,13 +8443,13 @@ function Atributos({ m, onInfo }) {
             <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline" }}>
               <button
                 onClick={() => onInfo && onInfo(k)}
-                style={{ all: "unset", cursor: "pointer", fontSize: 9.5, color: P.muted, fontWeight: 700, letterSpacing: 0.6, borderBottom: `1px dotted ${P.rule}` }}
+                style={{ all: "unset", cursor: "pointer", fontSize: T.micro, color: P.muted, fontWeight: 700, letterSpacing: 0.6, borderBottom: `1px dotted ${P.rule}` }}
               >
                 {INFO_ATRIB[k].k}
               </button>
-              <span style={{ color: colAtrib(v), fontFamily: "ui-monospace, monospace", fontWeight: 700, fontSize: 10.5 }}>{v}</span>
+              <span style={{ color: colAtrib(v), fontFamily: MONO, fontWeight: 700, fontSize: T.menor }}>{v}</span>
             </div>
-            <div style={{ height: 3, background: P.sunken, borderRadius: 2, overflow: "hidden", marginTop: 2 }}>
+            <div style={{ height: 3, background: P.sunken, borderRadius: R.hilo, overflow: "hidden", marginTop: 2 }}>
               <div style={{ width: `${v}%`, height: "100%", background: colAtrib(v) }} />
             </div>
           </div>
@@ -8079,7 +8469,7 @@ function AccionesTren({ t, supr, dir, onRotar, onApartar, onSuprimir, grande }) 
     { l: "Suprimir", c: P.alert, on: onSuprimir, no: supr || t.supresion || dir === "maniobra" },
   ];
   return (
-    <div style={{ display: "flex", gap: 5, marginTop: 9 }}>
+    <div style={{ display: "flex", gap: 4, marginTop: 8 }}>
       {acciones.map((a2) => (
         <button
           key={a2.l}
@@ -8093,7 +8483,7 @@ function AccionesTren({ t, supr, dir, onRotar, onApartar, onSuprimir, grande }) 
             background: P.surface,
             color: a2.no ? P.muted : a2.c,
             border: `1px solid ${a2.no ? P.sunken : a2.c}`,
-            borderRadius: 7,
+            borderRadius: R.normal,
             padding: grande ? "11px 0" : "8px 0",
             fontFamily: "inherit",
             fontSize: grande ? 13.5 : 12.5,
@@ -8109,23 +8499,94 @@ function AccionesTren({ t, supr, dir, onRotar, onApartar, onSuprimir, grande }) 
   );
 }
 
+/* Cierre por arrastre de las hojas de perfil. El gesto natural en una hoja
+   inferior es empujarla hacia abajo, así que se escucha el puntero sobre el
+   propio panel.
+
+   La clave es no pelearse con el desplazamiento: el arrastre solo empieza si
+   el contenido está arriba del todo. Si el jugador está a media lectura y tira
+   hacia abajo, lo que quiere es seguir leyendo, no cerrar.               */
+const ARRASTRE_MINIMO = 8; // por debajo se considera un toque, no un arrastre
+const ARRASTRE_CIERRE = 95; // a partir de aquí se cierra al soltar
+
+function useCerrarArrastrando(close) {
+  const [dy, setDy] = useState(0);
+  const est = useRef({ activo: false, y0: 0, dy: 0 });
+
+  const onPointerDown = (e) => {
+    if (e.currentTarget.scrollTop > 0) return; // manda el desplazamiento
+    est.current = { activo: true, y0: e.clientY, dy: 0 };
+  };
+
+  const onPointerMove = (e) => {
+    if (!est.current.activo) return;
+    const d = e.clientY - est.current.y0;
+    est.current.dy = d;
+    // solo se arrastra hacia abajo, y con algo de resistencia al principio
+    setDy(d > ARRASTRE_MINIMO ? d - ARRASTRE_MINIMO : 0);
+  };
+
+  const soltar = () => {
+    if (!est.current.activo) return;
+    const d = est.current.dy;
+    est.current = { activo: false, y0: 0, dy: 0 };
+    if (d - ARRASTRE_MINIMO > ARRASTRE_CIERRE) close();
+    else setDy(0);
+  };
+
+  return {
+    onPointerDown,
+    onPointerMove,
+    onPointerUp: soltar,
+    onPointerCancel: soltar,
+    onPointerLeave: soltar,
+    style: {
+      transform: dy ? `translateY(${dy}px)` : "none",
+      transition: est.current.activo ? "none" : "transform .18s ease-out",
+      touchAction: "pan-y",
+    },
+  };
+}
+
+// asa superior: indica que la hoja se puede empujar hacia abajo
+function Asa() {
+  return (
+    <div style={{ display: "flex", justifyContent: "center", margin: "-4px 0 10px" }}>
+      <div style={{ width: 38, height: 4, borderRadius: R.hilo, background: P.rule }} />
+    </div>
+  );
+}
+
 function Etiqueta({ txt, c }) {
   return (
-    <span style={{ fontSize: 10.5, fontWeight: 700, color: c, border: `1px solid ${c}`, borderRadius: 4, padding: "1px 6px" }}>{txt}</span>
+    <span
+      style={{
+        fontSize: T.menor,
+        fontWeight: 700,
+        color: c,
+        border: `1px solid ${c}`,
+        borderRadius: R.menudo,
+        padding: "1px 6px",
+        whiteSpace: "nowrap",
+        animation: "cgo-entra .18s ease-out",
+      }}
+    >
+      {txt}
+    </span>
   );
 }
 
 function Kpi({ k, v, c, small }) {
   return (
     <div style={{ ...ST.card, padding: small ? "6px 5px" : "10px 11px", textAlign: small ? "center" : "left", minWidth: 0 }}>
-      <div style={{ fontSize: 8, letterSpacing: 0.5, textTransform: "uppercase", color: P.muted, fontWeight: 600, whiteSpace: "nowrap" }}>{k}</div>
+      <div style={{ fontSize: T.micro, letterSpacing: 0.5, textTransform: "uppercase", color: P.muted, fontWeight: 600, whiteSpace: "nowrap" }}>{k}</div>
       <div
         style={{
           fontSize: small ? 14 : 19,
           fontWeight: 700,
           color: c,
-          fontFamily: "ui-monospace, monospace",
-          marginTop: 1,
+          fontFamily: MONO,
+          marginTop: 2,
           letterSpacing: small ? -0.4 : 0,
           whiteSpace: "nowrap",
         }}
@@ -8139,9 +8600,41 @@ function Kpi({ k, v, c, small }) {
 function Fonts() {
   return (
     <style>{`
-      @import url('https://fonts.googleapis.com/css2?family=Archivo:wght@400;500;600;700&display=swap');
+      /* Las familias se cargan desde index.html con preconexión: importarlas
+         desde aquí se resuelve tarde y la página se repinta con la tipografía
+         suplente, moviendo todo de sitio al llegar la definitiva. */
       * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+      /* cifras de ancho fijo: horas, retrasos y números de tren no se mueven */
+      body { font-variant-numeric: tabular-nums; font-feature-settings: "tnum" 1; }
+      /* Se reserva siempre el hueco de la barra de desplazamiento. El Libro es
+         más corto que el resto de pantallas, así que al entrar desaparecía la
+         barra, el área visible se ensanchaba y el contenido centrado saltaba
+         unos píxeles a un lado. */
+      html { scrollbar-gutter: stable; }
       body { margin: 0; }
+
+      /* Movimiento. Los cambios de estado aparecían de golpe: una etiqueta que
+         surge, un color que salta, una incidencia que irrumpe. Un cuarto de
+         segundo basta para que el ojo siga el cambio sin que estorbe.      */
+      button { transition: background-color .16s ease, border-color .16s ease, color .16s ease, opacity .16s ease; }
+      button:active:not(:disabled) { transform: scale(.985); }
+
+      @keyframes cgo-entra { from { opacity: 0; transform: translateY(-3px); } to { opacity: 1; transform: none; } }
+      @keyframes cgo-hoja { from { opacity: 0; transform: translateY(14px); } to { opacity: 1; transform: none; } }
+      @keyframes cgo-fondo { from { opacity: 0; } to { opacity: 1; } }
+
+      /* El icono de la pestaña se sumerge bajo el rótulo y vuelve a emerger */
+      @keyframes cgo-inmersion {
+        0%   { transform: translateY(1px); }
+        45%  { transform: translateY(16px); }
+        62%  { transform: translateY(16px); }
+        100% { transform: translateY(1px); }
+      }
+
+      /* quien prefiera no ver animaciones, no las ve */
+      @media (prefers-reduced-motion: reduce) {
+        *, *::before, *::after { animation-duration: .01ms !important; transition-duration: .01ms !important; }
+      }
       button:focus-visible { outline: 2px solid ${ROJO}; outline-offset: 2px; }
     `}</style>
   );
