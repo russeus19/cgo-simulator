@@ -5,8 +5,14 @@ import React, { useState, useEffect, useRef } from "react";
    Asignación de material + turno de mañana
    ══════════════════════════════════════════════════════════════ */
 
-const ROJO = "#D7282F";
-const P = {
+/* El rojo de la línea vive en LIN, que cambia con el tema. Aquí se expone como
+   objeto mutable para que las más de cien referencias lo lean al dibujar. */
+const COLOR = { rojo: "#D7282F" };
+/* Dos paletas con los mismos nombres. En oscuro no se invierten los tonos sin
+   más: los fondos son azulados y fríos, como un puesto de mando de verdad, y
+   los colores de estado se aclaran para que aguanten sobre fondo oscuro sin
+   vibrar.                                                                */
+const CLARO = {
   ground: "#E9EBEA",
   surface: "#FFFFFF",
   blanco: "#FFFFFF", // texto sobre fondos de color
@@ -14,10 +20,33 @@ const P = {
   muted: "#6B7780",
   rule: "#D5DAD9",
   sunken: "#F3F5F4",
+  solido: "#11161A", // fondo macizo con texto blanco encima
   ok: "#0E7A50",
   warn: "#D98200",
   alert: "#C8102E",
 };
+
+const OSCURO = {
+  ground: "#0D1117",
+  surface: "#161C24",
+  blanco: "#FFFFFF",
+  ink: "#E4E9EE",
+  muted: "#7F8C99",
+  rule: "#2A333D",
+  sunken: "#1E262F",
+  /* En oscuro no puede ser el color del texto: quedaba una pastilla clara con
+     el texto blanco encima. Este tono se despega de la tarjeta (3,3:1) y
+     mantiene el blanco legible encima (5,2:1).                         */
+  solido: "#5B6E85",
+  ok: "#2FA26E",
+  warn: "#E8A33D",
+  alert: "#F05A6B",
+};
+
+/* La paleta se muta en el sitio en vez de sustituirse: hay más de quinientas
+   referencias a P repartidas por el juego y todas leen sus valores al dibujar,
+   así que basta con cambiar el contenido y volver a dibujar.             */
+const P = { ...CLARO };
 
 /* ── infraestructura ────────────────────────────────────────── */
 
@@ -444,6 +473,29 @@ function retrasoVis(t, g) {
   return t.rAnt + d * frac;
 }
 const situacionVis = (t, g) => situacion({ ...t, retraso: retrasoVis(t, g) }, g.reloj);
+/* Contadores del turno. Van en una constante porque también hacen falta al
+   recuperar una partida guardada: si el turno se grabó con una versión que no
+   tenía alguno de estos campos, al sumarle un número daba "NaN" y el parte
+   final aparecía con valores vacíos.
+
+   Las medias se acumulan minuto a minuto. Las que se ven en la barra son la
+   foto del instante: si al cerrar todo va bien, el parte diría que el turno
+   fue bueno aunque a media mañana hubiera un caos.                       */
+const KPI_INICIAL = {
+  muestras: 0,
+  puntuales: 0,
+  coste: 0,
+  afect: 0,
+  sumaRetraso: 0,
+  sumaOcup: 0,
+  minutosOcup: 0,
+  transportados: 0,
+  picoRetraso: 0,
+  horaPico: 0,
+  minutosApuro: 0,
+  calidad: 0, // penalizaciones de calidad percibida, aún sin usar
+};
+
 const margenDe = (m) => Math.min(COND_MAX - m.cond, JORNADA_MAX - m.jornada);
 const fase = (t, reloj) => (((reloj - t.retraso - t.offset) % CICLO) + CICLO) % CICLO;
 const plazasDe = (t) => t.unidades.reduce((s, u) => s + u.plazas, 0);
@@ -915,7 +967,9 @@ function efectuarParada(g, t, i, dir) {
     return { suben: 0, bajan: aBordo, dejados: 0 };
   }
 
+  // un viajero cuenta como transportado cuando llega a su destino
   const bajan = t.pax[i] || 0;
+  g.kpi.transportados += bajan;
   t.pax[i] = 0;
   const cap = plazasDe(t);
   const aBordo = t.pax.reduce((a, b) => a + b, 0);
@@ -1674,7 +1728,7 @@ const AVERIAS_MATERIAL = [
     gen: (c) => ({
       texto: "Una puerta no confirma el cierre. El tren no puede iniciar la marcha hasta condenarla.",
       opciones: [
-        { label: "Condenar la puerta y continuar", detalle: "Paradas más largas el resto del turno", ef: { limitacion: { i: c.i, m: 2 }, retraso: { i: c.i, m: 5 }, afect: 300 } },
+        { label: "Condenar la puerta y continuar", detalle: "Paradas más largas el resto del turno", ef: { limitacion: { i: c.i, m: 2 }, retraso: { i: c.i, m: 5 }, afectABordo: c.i } },
         desacople(c, 7),
         ...opcionesCambio(c),
         retirada(c, 4),
@@ -1720,29 +1774,74 @@ const AVERIAS_MATERIAL = [
 
 const ORDEN_PUBLICO = [
   {
-    id: "alarma", nombre: "Accionamiento indebido de aparato de alarma", p: 50,
+    id: "alarma", nombre: "Accionamiento indebido de aparato de alarma", p: 40,
     gen: (c) => ({
       texto: "Alguien acciona el aparato de alarma sin motivo. El tren queda inmovilizado hasta que el maquinista lo repone.",
-      opciones: [{ label: "Reponer el aparato y reanudar", detalle: "El maquinista rearma el aparato y el tren continúa", ef: { retraso: { i: c.i, m: 4 } } }],
+      opciones: [
+        {
+          label: "Reponer el aparato y reanudar la marcha",
+          detalle: "El maquinista lo rearma y continúa, pero hay posibilidad de que vuelva a suceder",
+          ef: { retraso: { i: c.i, m: 4 }, repiteAlarma: c.i },
+        },
+        {
+          label: "Reponer el aparato y mandar a Seguridad",
+          detalle: "Cuesta dos minutos más, pero no vuelve a ocurrir en ese tren",
+          ef: { retraso: { i: c.i, m: 6 } },
+        },
+      ],
     }),
   },
   {
-    id: "puerta", nombre: "Desbloqueo de una puerta", p: 30,
+    id: "puerta", nombre: "Desbloqueo de una puerta", p: 24,
     gen: (c) => ({
       texto: "Un viajero acciona el desbloqueo de emergencia y abre una puerta. El tren no puede circular hasta asegurarla.",
       opciones: [
-        { label: "Condenar la puerta y continuar", detalle: "Paradas más largas el resto del turno", ef: { retraso: { i: c.i, m: 6 }, limitacion: { i: c.i, m: 2 }, afect: 250 } },
+        { label: "Condenar la puerta y continuar", detalle: "Paradas más largas el resto del turno", ef: { retraso: { i: c.i, m: 6 }, limitacion: { i: c.i, m: 2 }, afectABordo: c.i } },
         { label: "Retirar el tren para revisión", detalle: "Se pierde la circulación", ef: { retirarCabecera: c.i, retraso: { i: c.i, m: 3 } } },
       ],
     }),
   },
   {
-    id: "conflictivo", nombre: "Desalojo de viajero conflictivo", p: 20,
+    /* Los carteristas no paran el tren: enfrentan puntualidad contra viajeros,
+       que es una decisión distinta a todas las demás del juego.          */
+    id: "carteristas", nombre: "Carteristas a bordo", p: 20,
+    gen: (c) => ({
+      texto: "El maquinista detecta a un grupo de carteristas actuando entre los viajeros.",
+      opciones: [
+        {
+          label: "Aviso por megafonía",
+          detalle: "Apenas cuesta tiempo, pero rara vez sirve y la calidad del servicio se resiente",
+          ef: { retraso: { i: c.i, m: 2 }, carteristas: { i: c.i, exito: 0.15 }, calidad: -18 },
+        },
+        {
+          label: "Mandar seguridad en la próxima estación",
+          detalle: "Suele bastar, y la parada se alarga",
+          ef: { retraso: { i: c.i, m: 5 + Math.floor(Math.random() * 11) }, carteristas: { i: c.i, exito: 0.8 }, calidad: -4 },
+        },
+        {
+          label: "Mandar policía en la próxima estación",
+          detalle: "Lo resuelve siempre, pero inmoviliza el tren un buen rato",
+          ef: { retraso: { i: c.i, m: 10 + Math.floor(Math.random() * 16) } },
+        },
+      ],
+    }),
+  },
+  {
+    id: "conflictivo", nombre: "Desalojo de viajero conflictivo", p: 16,
     gen: (c) => ({
       texto: "Altercado a bordo. Se requiere la intervención de seguridad para desalojar al viajero.",
       opciones: [
-        { label: "Esperar a seguridad en la estación", detalle: "El tren queda retenido hasta la intervención", ef: { retraso: { i: c.i, m: 11 } } },
-        { label: "Continuar hasta estación con dotación", detalle: "Menos retraso, el altercado sigue a bordo", ef: { retraso: { i: c.i, m: 5 }, afect: 500 } },
+        {
+          label: "Esperar a seguridad en la estación",
+          // lo que tarde la dotación no se sabe de antemano
+          detalle: "El tren queda retenido hasta la intervención, entre 8 y 20 min",
+          ef: { retraso: { i: c.i, m: 8 + Math.floor(Math.random() * 13) } },
+        },
+        {
+          label: "Continuar hasta estación con dotación",
+          detalle: "Menos retraso, pero el altercado sigue a bordo y puede ir a más",
+          ef: { retraso: { i: c.i, m: 5 }, altercado: c.i },
+        },
       ],
     }),
   },
@@ -1917,7 +2016,7 @@ const POOL = [
         texto: `Se solicita asistencia sanitaria en ${donde}. El tren queda detenido en andén hasta la llegada del servicio médico.`,
         opciones: [
           { label: "Esperar a los servicios sanitarios", detalle: "Retraso propio y del que viene detrás", ef: { retraso: { i: tr.i, m: 11 } } },
-          { label: "Desalojar y apartar el tren", detalle: "Se libera la vía, se pierde la circulación", ef: { suprimir: tr.i, afect: 700 } },
+          { label: "Desalojar y apartar el tren", detalle: "Se libera la vía, se pierde la circulación", ef: { suprimir: tr.i, afectABordo: tr.i } },
         ],
       };
     },
@@ -1931,7 +2030,7 @@ const POOL = [
         titulo: `Robo de cable ${tr.txt}`,
         texto: "Sustracción de conductor de señalización. Sin protección, los trenes solo pueden circular con marcha a la vista por el tramo.",
         opciones: [
-          { label: "Marcha a la vista en el tramo", detalle: `Todo tren que pase pierde tiempo · ${prevision(dur)}`, ef: { restriccion: { idx: tr.idx, m: 7, dur: dur, txt: `Marcha a la vista ${tr.txt}` }, afect: 800 } },
+          { label: "Marcha a la vista en el tramo", detalle: `Todo tren que pase pierde tiempo · ${prevision(dur)}`, ef: { restriccion: { idx: tr.idx, m: 7, dur: dur, txt: `Marcha a la vista ${tr.txt}` }, afectLinea: 0.5 } },
           { label: "Transbordo por carretera en el tramo", detalle: "Autobuses lanzadera, coste elevado", ef: { restriccion: { idx: tr.idx, m: 3, dur: dur, txt: `Transbordo ${tr.txt}` }, coste: 6800, afect: 400 } },
         ],
       };
@@ -1954,8 +2053,8 @@ const POOL = [
         opciones: [
           puede
             ? { label: "Reforzar con material de reserva", detalle: `Sale una ${tr.serie} de Fuencarral para acoplar`, ef: { reforzar: tr.i, coste: 2400 } }
-            : { label: "Refuerzo de personal en andenes", detalle: "Ordena la carga, pero alarga las paradas", ef: { retraso: { i: tr.i, m: 4 }, coste: 1200, afect: 500 } },
-          { label: "Asumir la sobreocupación", detalle: "Trenes al límite y paradas más largas", ef: { retraso: { i: tr.i, m: 7 }, afect: 1500 } },
+            : { label: "Refuerzo de personal en andenes", detalle: "Ordena la carga, pero alarga las paradas", ef: { retraso: { i: tr.i, m: 4 }, coste: 1200, afectAnden: donde } },
+          { label: "Asumir la sobreocupación", detalle: "Trenes al límite y paradas más largas", ef: { retraso: { i: tr.i, m: 7 }, afectAnden: donde } },
         ],
       };
     },
@@ -1996,7 +2095,7 @@ const POOL = [
           doble
             ? { label: `Desacoplar la ${u.id} para limpieza`, detalle: "Sigue en servicio con la mitad de plazas", ef: { desacoplar: { i: tr.i, u: u.id }, retraso: { i: tr.i, m: 9 } } }
             : { label: "Retirar el tren para limpieza", detalle: "Se pierde la circulación el resto del turno", ef: { suprimir: tr.i } },
-          { label: "Reanudar el servicio con la pintada", detalle: "Se limpiará al cierre; mala imagen todo el día", ef: { retraso: { i: tr.i, m: 7 }, afect: 400, coste: 900 } },
+          { label: "Reanudar el servicio con la pintada", detalle: "Se limpiará al cierre; mala imagen todo el día", ef: { retraso: { i: tr.i, m: 7 }, afectLinea: 0.25, coste: 900 } },
         ],
       };
     },
@@ -2088,8 +2187,8 @@ const POOL = [
         titulo: `Arrollamiento en ${e.n}`,
         texto: "Circulación interrumpida por causa ajena a la explotación. Intervención judicial sin previsión de restablecimiento.",
         opciones: [
-          { label: "Mantener el corte hasta el levantamiento", detalle: `Todo tren que llegue al punto queda retenido · ${prevision(dur)}`, ef: { restriccion: { idx: i, m: 16, dur: dur, txt: `Corte en ${e.corto}` }, afect: 2600 } },
-          { label: "Plan alternativo por carretera", detalle: "Autobuses en el tramo, coste elevado", ef: { restriccion: { idx: i, m: 9, dur: dur, txt: `Transbordo en ${e.corto}` }, coste: 11500, afect: 900 } },
+          { label: "Mantener el corte hasta el levantamiento", detalle: `Todo tren que llegue al punto queda retenido · ${prevision(dur)}`, ef: { restriccion: { idx: i, m: 16, dur: dur, txt: `Corte en ${e.corto}` }, afectLinea: 1 } },
+          { label: "Plan alternativo por carretera", detalle: "Autobuses en el tramo, coste elevado", ef: { restriccion: { idx: i, m: 9, dur: dur, txt: `Transbordo en ${e.corto}` }, coste: 11500, afectLinea: 0.4 } },
         ],
       };
     },
@@ -2156,7 +2255,8 @@ function propuestaTaller(camp) {
 
   const conDesgaste = (u) => {
     const d = camp && camp.desg[u.id] !== undefined ? camp.desg[u.id] : u.desgaste;
-    return { ...u, desgaste: d, fiab: fiabDesgaste(d) };
+    // una unidad ya pasada de ciclo sigue marcada: si no, vuelve a avisar
+    return { ...u, desgaste: d, fiab: fiabDesgaste(d), vencida: d >= DESGASTE_MAX };
   };
 
   const orden = (u) => DESGASTE_MAX - u.desgaste; // primero las más descansadas
@@ -2260,6 +2360,65 @@ async function cargarCampana() {
   }
 }
 
+/* Guardado del turno en curso. Ningún navegador respeta del todo la orden de
+   no recargar al arrastrar, y además siempre se puede recargar sin querer o
+   cerrar la pestaña. En vez de pelear con el navegador, la partida se guarda
+   sola y al volver se reanuda donde estaba.                              */
+const CLAVE_PARTIDA = "cgo:partida";
+
+function guardarPartida(g, modo, tab) {
+  try {
+    if (!g || g.fin) return localStorage.removeItem(CLAVE_PARTIDA);
+    localStorage.setItem(CLAVE_PARTIDA, JSON.stringify({ g, modo, tab, turno: g.turno }));
+  } catch (e) {
+    console.warn("[CGO] no se pudo guardar el turno", e);
+  }
+}
+
+/* Una partida guardada puede venir de una versión anterior del juego, con
+   campos que entonces no existían. Se completan con sus valores de partida en
+   vez de dejarlos vacíos: sumar un número a algo indefinido da "NaN", y así
+   el parte final salía con los datos en blanco.                          */
+function completarPartida(g) {
+  if (!g) return null;
+  g.kpi = { ...KPI_INICIAL, ...(g.kpi || {}) };
+  for (const k of Object.keys(KPI_INICIAL)) if (typeof g.kpi[k] !== "number" || Number.isNaN(g.kpi[k])) g.kpi[k] = KPI_INICIAL[k];
+  g.trenes = (g.trenes || []).map((t) => ({
+    ...t,
+    pax: t.pax || [],
+    hist: t.hist || [],
+    marchas: t.marchas || [],
+    cuadroRelevos: t.cuadroRelevos || [],
+    acum: t.acum || { paradas: 0, bloqueo: 0, maquinista: 0 },
+    retraso: Number.isFinite(t.retraso) ? t.retraso : 0,
+    carteristas: !!t.carteristas,
+  }));
+  g.restricciones = g.restricciones || [];
+  g.cola = g.cola || [];
+  g.log = g.log || [];
+  return g;
+}
+
+function cargarPartida() {
+  try {
+    const v = localStorage.getItem(CLAVE_PARTIDA);
+    if (!v) return null;
+    const d = JSON.parse(v);
+    if (d && d.g) d.g = completarPartida(d.g);
+    return d;
+  } catch (e) {
+    return null;
+  }
+}
+
+function borrarPartida() {
+  try {
+    localStorage.removeItem(CLAVE_PARTIDA);
+  } catch (e) {
+    /* no pasa nada si no existía */
+  }
+}
+
 async function borrarCampana() {
   try {
     localStorage.removeItem(CLAVE_CAMPANA);
@@ -2280,15 +2439,40 @@ const campanaNueva = () => ({
   retrasos: null,
   andenes: null,
   restricciones: [],
-  acum: { turnos: 0, punt: 0, afect: 0, coste: 0, puntos: 0, suprimidas: 0 },
+  acum: { turnos: 0, punt: 0, coste: 0, puntos: 0, suprimidas: 0 },
 });
 
 // puntuación del turno: puntualidad menos lo que ha costado conseguirla
-function puntosTurno(g) {
-  const punt = g.kpi.muestras ? (g.kpi.puntuales / g.kpi.muestras) * 100 : 100;
-  const supr = g.trenes.filter((t) => t.estado === "suprimido").length;
-  return Math.round(punt * 10 - g.kpi.afect / 200 - g.kpi.coste / 1000 - supr * 60);
+/* Resumen del turno a partir de lo acumulado, no de la foto del cierre. */
+function balanceTurno(g) {
+  // último cortafuegos: ningún dato del parte debe poder salir como "NaN"
+  const n = (v) => (Number.isFinite(v) ? v : 0);
+  const k = { ...KPI_INICIAL, ...(g.kpi || {}) };
+  for (const key of Object.keys(k)) k[key] = n(k[key]);
+  const punt = k.muestras ? (k.puntuales / k.muestras) * 100 : 100;
+  const retrasoMedio = k.muestras ? k.sumaRetraso / k.muestras : 0;
+  const ocupMedia = k.minutosOcup ? k.sumaOcup / k.minutosOcup : 0;
+  const transportados = Math.round(k.transportados);
+  const afect = Math.round(k.afect);
+  // los afectados se miden en proporción a los viajeros llevados: 5.000 sobre
+  // 120.000 es un buen turno, y sobre 30.000 es un desastre
+  const tasaAfect = transportados > 0 ? (afect / transportados) * 100 : 0;
+  const completas = g.trenes.filter((t) => t.estado !== "suprimido" && !t.esVacio).length;
+  return { punt, retrasoMedio, ocupMedia, transportados, afect, tasaAfect, completas, calidad: k.calidad || 0, coste: k.coste, picoRetraso: k.picoRetraso, horaPico: k.horaPico, minutosApuro: k.minutosApuro, incidencias: n(g.incCount) };
 }
+
+/* Puntuación. Pesa sobre todo la puntualidad, después las circulaciones que
+   llegan enteras al final, y penaliza la proporción de afectados y el gasto. */
+function puntosTurno(g) {
+  const b = balanceTurno(g);
+  const base = b.punt * 10;
+  const circulaciones = (b.completas / CIRCULACIONES) * 200;
+  const castigoAfect = Math.min(400, b.tasaAfect * 12);
+  const castigoCoste = Math.min(200, b.coste / 400);
+  const castigoApuro = Math.min(150, b.minutosApuro * 1.5);
+  return Math.round(base + circulaciones - castigoAfect - castigoCoste - castigoApuro);
+}
+
 
 /* Fotografía del final del turno: material, desgaste, taller y apartado
    pasan tal cual al turno siguiente. El personal, no: entra gente nueva. */
@@ -2547,7 +2731,10 @@ function comenzarTurno(slots, apart, camp) {
     const c = CATALOGO.find((u) => u.id === id);
     if (!c) return null;
     const d = camp && camp.desg[id] !== undefined ? camp.desg[id] : c.desgaste;
-    return { ...c, desgaste: d, fiab: fiabDesgaste(d), vencida: false };
+    /* Si la unidad ya venía pasada de ciclo, sigue marcada: al reconstruirla
+       del catálogo cada turno se le borraba la marca y volvía a avisar. La
+       446-103 llegó a pedir taller dieciocho veces en veinte turnos.    */
+    return { ...c, desgaste: d, fiab: fiabDesgaste(d), vencida: d >= DESGASTE_MAX };
   };
 
   const trenes = slots.map((par, j) => {
@@ -2568,6 +2755,7 @@ function comenzarTurno(slots, apart, camp) {
       esperaCab: null,
       viaCab: null,
       hist: [],
+      cuadroRelevos: [], // relevos previstos por el cuadro, en orden
       marchas: [], // recorridos realmente efectuados, para el historial // sucesos que han movido el retraso
       acum: { paradas: 0, maquinista: 0, bloqueo: 0 }, // deriva continua acumulada
       pax: new Array(N).fill(0), // viajeros a bordo, por estación de destino
@@ -2580,6 +2768,9 @@ function comenzarTurno(slots, apart, camp) {
       supresion: null, // supresión ordenada: { idx, via }
       pendienteApartar: false, // material vacío a la espera de destino
       inmovil: null, // avería muy grave: { desde, restante, socorre }
+      alarmaSuelta: null, // hora en que puede repetirse la alarma
+      altercadoVivo: null, // hora en que se comprueba si el altercado va a más
+      carteristas: false, // siguen a bordo tras una medida insuficiente
       esperaVia: null, // sin vía libre a la entrada de una estación
       nocheEn: null, // dónde ha quedado estacionado al cierre del servicio
       viaPaso: null, // vía que ocupa al pasar por una estación con varias
@@ -2601,11 +2792,26 @@ function comenzarTurno(slots, apart, camp) {
     return t;
   });
 
-  // 2. el cuadro ya tiene previsto quién entra en cada relevo: son nominales,
-  //    no reservas. Se dan de alta en la cabecera y a la hora que les toca.
+  /* 2. El cuadro prevé TODOS los relevos que necesitará cada circulación
+        hasta el cierre, no solo el primero. El turno dura 480 min y la
+        conducción máxima seguida son 330, así que un maquinista que entra a
+        media mañana tampoco llega al final: hacen falta dos relevos en nueve
+        de las trece circulaciones. Dando de alta solo el primero, esas nueve
+        avisaban de "sin relevo" todos los días sin que pasara nada raro.  */
   for (const t of trenes) {
-    if (!t.relevo) continue;
-    alta({ tipo: "nominal", estado: "entrante", lugar: t.relevo.cab, entra: Math.max(INICIO, t.relevo.prevista - 25) });
+    let cuando = t.relevo;
+    let vueltas = 0;
+    t.cuadroRelevos = [];
+    while (cuando && vueltas < 6) {
+      vueltas += 1;
+      alta({ tipo: "nominal", estado: "entrante", lugar: cuando.cab, entra: Math.max(INICIO, cuando.prevista - 25) });
+      t.cuadroRelevos.push({ prevista: cuando.prevista, cab: cuando.cab, desde: cuando.desde });
+      // el que entra sale de descanso, con la jornada a cero
+      const entrante = { cond: 0, jornada: 0, descanso: 0 };
+      cuando = programarRelevo(t, entrante, cuando.prevista);
+    }
+    // el primero del cuadro es el relevo en curso
+    t.cuadroRelevos.shift();
   }
 
   // 3. reservas de contingencia
@@ -2702,12 +2908,40 @@ function comenzarTurno(slots, apart, camp) {
   // solo las marchas del turno: las de antes no le corresponden a este puesto
   for (const t of trenes) t.marchas = rotacionDelDia(t, INICIO, FIN).map((m) => ({ ...m, estado: "prevista" }));
 
-  // una circulación sin material arranca fuera de servicio
-  for (const t of trenes) if (!t.unidades.length && !t.reponer) t.estado = "suprimido";
-
   const reserva = LIBRES_C7.filter((u) => !usadas.has(u.id) && !enVia.has(u.id) && !enTaller.has(u.id) && !heredadas.has(u.id)).map((u) =>
     conDesgaste(u.id)
   );
+
+  /* Circulaciones que quedaron sin material. Perder un tren durante el turno
+     es una consecuencia justa; arrastrarlo para siempre, no: al abrir el turno
+     siguiente el taller cubre el hueco con lo que haya disponible. Sin esto la
+     flota se degradaba sin vuelta atrás, de trece circulaciones a cinco en una
+     veintena de turnos.                                                    */
+  const libres = reserva.filter((u) => cubreTurno(u));
+  const cogerPar = (serie) => {
+    const k = libres.findIndex((u) => u.serie === serie);
+    return k >= 0 ? libres.splice(k, 1)[0] : null;
+  };
+  for (const t of trenes) {
+    if (t.unidades.length || t.reponer) continue;
+    // primero un doble piso, que va solo; si no, una pareja de la misma serie
+    const suelta = cogerPar("450");
+    if (suelta) t.unidades = [suelta];
+    else
+      for (const se of ["465", "446"]) {
+        const a1 = cogerPar(se);
+        const a2 = a1 ? cogerPar(se) : null;
+        if (a1 && a2) {
+          t.unidades = [a1, a2];
+          break;
+        }
+        if (a1) libres.push(a1); // sin pareja no sirve: vuelve a la reserva
+      }
+    if (t.unidades.length) {
+      t.serie = t.unidades[0].serie;
+      for (const u of t.unidades) reserva.splice(reserva.findIndex((x) => x.id === u.id), 1);
+    } else t.estado = "suprimido"; // no queda material: sigue sin cubrir
+  }
 
   return {
     fase: "turno",
@@ -2723,7 +2957,7 @@ function comenzarTurno(slots, apart, camp) {
     trenes,
     personal,
     reserva,
-    kpi: { muestras: 0, puntuales: 0, afect: 0, coste: 0 },
+    kpi: { ...KPI_INICIAL },
     log: [{ m: INICIO, k: "info", t: `Turno abierto. ${trenes.length} circulaciones y ${personal.filter((m) => m.tipo === "reserva").length} maquinistas de reserva.` }],
     cola: [],
     vacios: [], // movimientos ordenados cuyo maquinista aún va de camino
@@ -2775,12 +3009,21 @@ function log(g, k, t) {
 
 // reservas de contingencia: solo para lo que se sale del cuadro
 function reservasEn(g, cab) {
-  return g.personal.filter((m) => m.tipo === "reserva" && m.estado === "reserva" && m.lugar === cab && !m.baja && margenDe(m) >= 60);
+  return g.personal.filter((m) => m.tipo === "reserva" && m.estado === "reserva" && m.lugar === cab && !m.baja && margenDe(m) >= margenExigido(g));
 }
 
 // relevo ordinario: el nominal al que le toca entrar en esa cabecera
+/* Margen que se le exige a quien entra de relevo. Pedir siempre una hora
+   descartaba a todos los maquinistas al final del turno: a las 20:12, con el
+   servicio cerrando, ninguno tiene una hora por delante, y el tren se quedaba
+   sin relevo teniendo dos disponibles en el andén.                       */
+function margenExigido(g) {
+  return Math.max(20, Math.min(60, FIN - g.reloj));
+}
+
 function nominalEn(g, cab) {
-  return g.personal.filter((m) => m.tipo === "nominal" && m.estado === "entrante" && m.lugar === cab && m.entra <= g.reloj && !m.baja && margenDe(m) >= 60);
+  const min = margenExigido(g);
+  return g.personal.filter((m) => m.tipo === "nominal" && m.estado === "entrante" && m.lugar === cab && m.entra <= g.reloj && !m.baja && margenDe(m) >= min);
 }
 
 /* ── motor ──────────────────────────────────────────────────── */
@@ -3088,7 +3331,13 @@ function minuto(g) {
     if (t.retenido) {
       t.retraso += 1;
       t.retDesde = t.retDesde || r;
-      if (nominalEn(g, t.retenido).length || reservasEn(g, t.retenido).length) {
+      /* Se comprueba exactamente el mismo grupo que usará el relevo. Antes se
+         miraba "nominales o reservas" pero luego solo se cogía de uno de los
+         dos: si el tren esperaba reserva y aparecía un nominal, se lanzaba el
+         relevo, fallaba y volvía a avisar. Cada minuto. De ahí que un mismo
+         tren llegara a generar doscientos avisos.                        */
+      const grupo = t.relevoConReserva ? reservasEn(g, t.retenido) : nominalEn(g, t.retenido);
+      if (grupo.length) {
         const cab = t.retenido;
         t.retenido = false;
         t.retDesde = null;
@@ -3563,6 +3812,56 @@ function minuto(g) {
   // el cuadro avanza solo: arranca lo que toca y cierra lo vencido
   for (const t of g.trenes) avanzarMarchas(g, t, r);
 
+  /* Alarmas que pueden repetirse: al no avisar a Seguridad, quien la accionó
+     sigue a bordo. Se comprueba una sola vez, entre 5 y 25 minutos después:
+     minuto a minuto la probabilidad se acumularía y acabaría saltando casi
+     siempre.                                                            */
+  for (const t of g.trenes) {
+    if (!t.alarmaSuelta || r < t.alarmaSuelta) continue;
+    t.alarmaSuelta = null;
+    if (t.estado === "suprimido" || Math.random() > 0.15) continue;
+    retrasar(g, t, 4, "nuevo accionamiento de la alarma");
+    log(g, "bad", `Tren ${numeroTren(t, g.reloj)}: vuelven a accionar el aparato de alarma. Había que haber avisado a Seguridad.`);
+  }
+
+  // altercados que van a más: el tren se queda donde esté hasta que llegue seguridad
+  for (const t of g.trenes) {
+    if (!t.altercadoVivo || r < t.altercadoVivo) continue;
+    t.altercadoVivo = null;
+    if (t.estado === "suprimido" || Math.random() > 0.2) continue;
+    const donde = ESTACIONES[Math.max(0, Math.min(N - 1, Math.round(situacion(t, r).idx)))];
+    const causa = Math.random() < 0.5 ? "se acciona el aparato de alarma" : "se desbloquea una puerta";
+    const espera = 10 + Math.floor(Math.random() * 16);
+    t.detenido = { restante: espera, motivo: "altercado a bordo, esperando a seguridad" };
+    // los afectados son los que van a bordo de verdad, no una cifra inventada
+    const aBordo = Math.round(t.pax.reduce((a2, b2) => a2 + b2, 0));
+    g.kpi.afect += aBordo;
+    log(
+      g,
+      "bad",
+      `Tren ${numeroTren(t, g.reloj)}: el altercado va a más y ${causa} a la altura de ${donde.n}. Inmovilizado ${espera} min con ${nf(aBordo)} viajeros a bordo.`
+    );
+  }
+
+  /* Medias del turno y momentos de apuro. Se toma una muestra por minuto de
+     lo que de verdad está pasando, no del estado final.                 */
+  {
+    const enServicio = g.trenes.filter((t) => t.estado !== "suprimido" && !t.esVacio);
+    const conPasaje = enServicio.filter(
+      (t) => !t.rotando && !t.enDesviada && !t.vacio && t.unidades.length && situacion(t, r).dir !== "maniobra"
+    );
+    if (conPasaje.length) {
+      g.kpi.sumaOcup += (conPasaje.reduce((n, t) => n + t.pax.reduce((a2, b2) => a2 + b2, 0) / (plazasDe(t) || 1), 0) / conPasaje.length) * 100;
+      g.kpi.minutosOcup += 1;
+    }
+    const medio = enServicio.length ? enServicio.reduce((n, t) => n + retrasoEfectivo(t), 0) / enServicio.length : 0;
+    if (medio > g.kpi.picoRetraso) {
+      g.kpi.picoRetraso = medio;
+      g.kpi.horaPico = Math.round(r);
+    }
+    if (g.trenes.some((t) => t.detenido || t.retenido || t.inmovil || t.esperaVia)) g.kpi.minutosApuro += 1;
+  }
+
   aplicarSeparacion(g);
 
   for (const t of g.trenes) {
@@ -3577,6 +3876,7 @@ function minuto(g) {
     if (t.esVacio) continue; // un tren sin viajeros no puntúa
     g.kpi.muestras += 1;
     if (retrasoEfectivo(t) <= 5.5) g.kpi.puntuales += 1;
+    g.kpi.sumaRetraso += retrasoEfectivo(t);
     if (t.dejados > 0) {
       g.kpi.afect += t.dejados;
       t.dejados = 0;
@@ -3645,8 +3945,11 @@ function ejecutarRelevo(g, t, cab, forzarReserva = false) {
     const hayReserva = reservasEn(g, cab).length;
     t.retenido = cab;
     t.relevo = null;
+    // si ya hay un aviso pendiente para este tren no se encola otro
+    if (t.avisado && g.cola.some((c) => c.tren === t.i && (c.titulo || "").startsWith("Sin relevo"))) return;
     t.avisado = true;
     g.cola.push({
+      tren: t.i,
       tipo: "aviso",
       titulo: `Sin relevo en ${cab}`,
       texto: `El ${numeroTren(t, g.reloj)} ha llegado a ${cab} para el relevo y el maquinista nominal no está disponible. Cada minuto retenido es retraso.`,
@@ -3680,7 +3983,10 @@ function ejecutarRelevo(g, t, cab, forzarReserva = false) {
   t.excesoAutorizado = false;
   t.retenido = false;
   t.relevoConReserva = false;
-  t.relevo = programarRelevo(t, entra, g.reloj);
+  /* El siguiente relevo sale del cuadro previsto, no de un sorteo nuevo: al
+     replanificarlo se elegía otra cabecera y el maquinista dado de alta se
+     quedaba esperando donde ya no iba a haber relevo.                    */
+  t.relevo = (t.cuadroRelevos && t.cuadroRelevos.shift()) || programarRelevo(t, entra, g.reloj);
   // si el cuadro prevé otro relevo, se da de alta al nominal que entra
   if (t.relevo && !g.personal.some((m) => m.tipo === "nominal" && m.estado === "entrante" && m.lugar === t.relevo.cab && Math.abs(m.entra - (t.relevo.prevista - 25)) < 30)) {
     g.personal.push({
@@ -3749,7 +4055,10 @@ function ejecutarCambio(g, t) {
       t.maq = entra.id;
       t.avisado = false;
       t.excesoAutorizado = false;
-      t.relevo = programarRelevo(t, entra, g.reloj);
+      /* El siguiente relevo sale del cuadro previsto, no de un sorteo nuevo: al
+     replanificarlo se elegía otra cabecera y el maquinista dado de alta se
+     quedaba esperando donde ya no iba a haber relevo.                    */
+  t.relevo = (t.cuadroRelevos && t.cuadroRelevos.shift()) || programarRelevo(t, entra, g.reloj);
       txtMaq = ` Lo toma ${entra.nombre}.`;
     }
   }
@@ -3817,7 +4126,7 @@ function suprimir(g, t, msg, enIdx = null, enVia = null) {
    consola en vez de ignorarlo en silencio, que es lo que pasaba antes.    */
 const EFECTOS = [
   "abortarRotacion", "acompanante", "adelantar", "afect", "apartarPaso", "autorizar", "cab", "cambioMaterial",
-  "circularVacio", "coste", "corteVia", "desacoplar", "destinoVacio", "esperarCabecera", "averiaGrave", "fiabBaja", "gen", "limitacion", "moverApartado", "ordenarRotacion", "socorro",
+  "circularVacio", "coste", "corteVia", "desacoplar", "afectABordo", "afectAnden", "afectLinea", "calidad", "carteristas", "destinoVacio", "altercado", "repiteAlarma", "esperarCabecera", "averiaGrave", "fiabBaja", "gen", "limitacion", "moverApartado", "ordenarRotacion", "socorro",
   "reforzar", "relevaReserva", "relevoInmediato", "reponer", "restriccion", "retener", "retirarCabecera",
   "retirarMaq", "retraso", "riesgo", "supresion", "suprimir",
 ];
@@ -3948,6 +4257,59 @@ function aplicar(g, ef) {
       t.pendienteApartar = true; // el puesto de mando elegirá estación y vía
       log(g, "aviso", `Tren ${numeroTren(t, g.reloj)}: desaloja en la próxima parada y circula como material vacío. Falta decidir dónde se aparta.`);
     }
+  }
+
+  /* Alarma repuesta sin avisar a Seguridad: puede volver a accionarse. Se
+     fija el momento de la comprobación al aceptar la decisión.          */
+  /* Altercado que sigue a bordo. Se comprueba una sola vez, poco después: si
+     va a más, el tren queda inmovilizado donde esté hasta que llegue la
+     dotación de seguridad, sea una estación o plena vía.                */
+  /* Afectados calculados del estado real. Antes cada opción llevaba una cifra
+     inventada, siempre la misma, sin mirar la hora ni la ocupación: 500 en
+     punta y 500 de madrugada. Ahora se cuentan los viajeros que de verdad
+     están a bordo o esperando.                                          */
+  if (ef.afectABordo) {
+    const t = T(ef.afectABordo);
+    if (t) g.kpi.afect += Math.round(t.pax.reduce((a2, b2) => a2 + b2, 0));
+  }
+  if (ef.afectAnden !== undefined && ef.afectAnden !== null) {
+    const a2 = g.andenes[ef.afectAnden];
+    if (a2) g.kpi.afect += Math.round(a2.alcala + a2.pio);
+  }
+  if (ef.afectLinea) {
+    const aBordo = g.trenes.reduce((n, t) => n + t.pax.reduce((x, y) => x + y, 0), 0);
+    const enAnden = g.andenes.reduce((n, x) => n + x.alcala + x.pio, 0);
+    // el corte afecta a los de a bordo y a los que esperan, en proporción
+    g.kpi.afect += Math.round((aBordo + enAnden) * ef.afectLinea);
+  }
+
+  /* Carteristas que siguen a bordo. Se resuelve en el momento: si la medida
+     no ha surtido efecto, continúan robando el resto del trayecto y los
+     afectados son los viajeros que de verdad lleva el tren.             */
+  /* Calidad del servicio. Todavía no se muestra ni puntúa, pero ya se acumula:
+     hay decisiones que salen baratas en tiempo y caras en percepción, y sin
+     este registro no hay forma de reflejarlo cuando se implemente.      */
+  if (ef.calidad) g.kpi.calidad += ef.calidad;
+
+  if (ef.carteristas) {
+    const t = T(ef.carteristas.i);
+    if (t && Math.random() > ef.carteristas.exito) {
+      t.carteristas = true;
+      const aBordo = Math.round(t.pax.reduce((a2, b2) => a2 + b2, 0));
+      g.kpi.afect += aBordo;
+      g.kpi.calidad -= 10; // los robos consumados pesan en la percepción
+      log(g, "bad", `Tren ${numeroTren(t, g.reloj)}: los carteristas siguen actuando con ${nf(aBordo)} viajeros a bordo.`);
+    }
+  }
+
+  if (ef.altercado) {
+    const t = T(ef.altercado);
+    if (t) t.altercadoVivo = g.reloj + 4 + Math.floor(Math.random() * 12);
+  }
+
+  if (ef.repiteAlarma) {
+    const t = T(ef.repiteAlarma);
+    if (t) t.alarmaSuelta = g.reloj + 5 + Math.floor(Math.random() * 21);
   }
 
   if (ef.socorro) {
@@ -4115,7 +4477,7 @@ function aplicar(g, ef) {
 function clonar(p) {
   return {
     ...p,
-    trenes: p.trenes.map((t) => ({ ...t, unidades: t.unidades.map((u) => ({ ...u })), pax: [...t.pax], hist: [...t.hist], marchas: [...(t.marchas || [])], acum: { ...t.acum } })),
+    trenes: p.trenes.map((t) => ({ ...t, unidades: t.unidades.map((u) => ({ ...u })), pax: [...t.pax], hist: [...t.hist], marchas: [...(t.marchas || [])], cuadroRelevos: [...(t.cuadroRelevos || [])], acum: { ...t.acum } })),
     personal: p.personal.map((m) => ({ ...m })),
     kpi: { ...p.kpi },
     reserva: p.reserva.map((u) => ({ ...u })),
@@ -4155,14 +4517,23 @@ function avanzar(prev, dt) {
 const CLIP_BAJA = "polygon(0% 0%, 100% 0%, 100% 68%, 50% 100%, 0% 68%)";
 const CLIP_SUBE = "polygon(50% 0%, 100% 32%, 100% 100%, 0% 100%, 0% 32%)";
 
-const ST = {
+/* ST guarda copias de los colores en el momento de crearse, así que al cambiar
+   de tema hay que rehacerlo. Se construye desde una función para poder
+   reconstruirlo sin tocar las referencias que ya existen.                */
+function construirST() {
+  return {
   wrap: { background: P.ground, color: P.ink, minHeight: "100vh", fontFamily: FUENTE, maxWidth: 540, margin: "0 auto", padding: "14px 14px 40px" },
-  card: { background: P.surface, borderRadius: R.grande, border: `1px solid ${P.rule}`, boxShadow: SOMBRA.card },
+  /* Sin sombra. La llevaba desde que montamos el sistema de profundidad, y en
+     listados de trece o cuarenta y seis tarjetas obliga al navegador a
+     componer una capa por tarjeta y repintarlas en cada refresco. El Libro
+     iba fino porque solo tiene una. El relieve queda para lo que de verdad
+     flota: hojas, desplegables y la barra.                              */
+  card: { background: P.surface, borderRadius: R.grande, border: `1px solid ${P.rule}` },
   eyebrow: { fontSize: T.menor, letterSpacing: 1.8, textTransform: "uppercase", color: P.muted, fontWeight: 600 },
   btn: (on) => ({
     flex: 1,
     border: `1px solid ${on ? P.ink : P.rule}`,
-    background: on ? P.ink : P.surface,
+    background: on ? P.solido : P.surface,
     color: on ? P.blanco : P.ink,
     borderRadius: R.normal,
     padding: "9px 0",
@@ -4171,12 +4542,31 @@ const ST = {
     fontFamily: MONO,
     cursor: "pointer",
   }),
-};
+  };
+}
+
+const ST = construirST();
+
+/* Cambio de tema: se sustituye el contenido de la paleta y se rehacen los
+   estilos compartidos. Quien dibuje después leerá ya los valores nuevos. */
+function aplicarTema(oscuro) {
+  Object.assign(P, oscuro ? OSCURO : CLARO);
+  /* El rojo de marca se queda en 3,5:1 sobre el fondo oscuro: vale para el
+     trazado del mapa, pero es justo para texto. En oscuro se aclara. */
+  COLOR.rojo = oscuro ? "#F0464D" : "#D7282F";
+  LIN[LINEA] = COLOR.rojo;
+  Object.assign(ST, construirST());
+  if (typeof document !== "undefined") {
+    document.body.style.background = P.ground;
+    document.documentElement.style.colorScheme = oscuro ? "dark" : "light";
+  }
+}
 
 export default function CGOC7() {
   const [asig, setAsig] = useState(initAsignacion);
   const [g, setG] = useState(null);
   const [tab, setTab] = useState("trenes");
+
   const [detalle, setDetalle] = useState(true);
   const [rotarDe, setRotarDe] = useState(null);
   const [apartarDe, setApartarDe] = useState(null);
@@ -4185,6 +4575,46 @@ export default function CGOC7() {
   const [apartaderoDe, setApartaderoDe] = useState(null);
   const [vacioDe, setVacioDe] = useState(null);
   const [focoTren, setFocoTren] = useState(null); // tren al que ir en el mapa
+  // 'aviso' ya nombra la incidencia en curso, así que este va aparte
+  const [confirmacion, setConfirmacion] = useState(null);
+
+  // la confirmación de guardado se retira sola pasados unos segundos
+  useEffect(() => {
+    if (!confirmacion) return;
+    const id = setTimeout(() => setConfirmacion(null), 3200);
+    return () => clearTimeout(id);
+  }, [confirmacion]);
+  const [cerrarPartida, setCerrarPartida] = useState(false);
+  const [ajustes, setAjustes] = useState(false);
+  /* El tema sigue al sistema salvo que se elija a mano. Se guarda aparte de la
+     partida: es una preferencia del jugador, no del turno.              */
+  const [tema, setTema] = useState(() => {
+    try {
+      return localStorage.getItem("cgo:tema") || "auto";
+    } catch (e) {
+      return "auto";
+    }
+  });
+  /* Al elegir tema se guarda la preferencia y se aplica. En automático se
+     escucha al sistema, para que el juego cambie si el móvil pasa a modo
+     nocturno a media partida.                                           */
+  const [, repintar] = useState(0);
+  useEffect(() => {
+    try {
+      localStorage.setItem("cgo:tema", tema);
+    } catch (e) {
+      /* si no se puede guardar, el tema dura lo que la sesión */
+    }
+    const consulta = window.matchMedia ? window.matchMedia("(prefers-color-scheme: dark)") : null;
+    const resolver = () => {
+      aplicarTema(tema === "oscuro" || (tema === "auto" && !!consulta && consulta.matches));
+      repintar((n) => n + 1);
+    };
+    resolver();
+    if (tema !== "auto" || !consulta) return;
+    consulta.addEventListener("change", resolver);
+    return () => consulta.removeEventListener("change", resolver);
+  }, [tema]);
   const [unidadSel, setUnidadSel] = useState(null);
   const [tallerAbierto, setTallerAbierto] = useState(null);
   const [gestionUd, setGestionUd] = useState(null);
@@ -4217,9 +4647,17 @@ export default function CGOC7() {
   const [cargando, setCargando] = useState(true);
   const [modo, setModo] = useState("campana");
 
-  // se recupera la campaña guardada al abrir la aplicación
+  // se recupera la campaña guardada, y el turno si había uno a medias
   useEffect(() => {
     let vivo = true;
+    const partida = cargarPartida();
+    if (partida && partida.g) {
+      fijarTurno(partida.turno || partida.g.turno);
+      setG(partida.g);
+      setModo(partida.modo || "campana");
+      setTab(partida.tab || "trenes");
+      setPantalla("asignacion"); // ya hay partida: se dibuja el puesto de mando
+    }
     cargarCampana().then((c) => {
       if (!vivo) return;
       setCamp(c);
@@ -4230,11 +4668,36 @@ export default function CGOC7() {
     };
   }, []);
 
+  /* Guardado periódico. Estaba planteado con una espera de 1,2 s que se
+     cancelaba en cada tick del reloj: como el estado cambia cada medio
+     segundo, la espera no llegaba a cumplirse nunca y la partida no se
+     guardaba sola mientras se jugaba. Ahora se mira el tiempo transcurrido,
+     que no depende del ritmo de la simulación.                          */
+  /* El guardado escribe unos 31 KB en el almacenamiento del navegador, y esa
+     escritura es SÍNCRONA: bloquea el hilo mientras dura. Estaba enganchada al
+     cambio de pestaña, así que cada vez que se pulsaba un menú se pagaba la
+     escritura. Ahora va por su cuenta, con su propio reloj.             */
+  const estadoVivo = useRef(null);
+  estadoVivo.current = { g, modo, tab };
+  useEffect(() => {
+    const iv = setInterval(() => {
+      const v = estadoVivo.current;
+      if (v && v.g) guardarPartida(v.g, v.modo, v.tab);
+    }, 8000);
+    return () => clearInterval(iv);
+  }, []);
+
   useEffect(() => {
     if (!g || !g.marcha || g.fin || g.cola.length) return;
-    const iv = setInterval(() => setG((p) => (p && p.marcha && !p.cola.length && !p.fin ? avanzar(p, 0.1 * p.vel) : p)), 100);
+    /* El ritmo de refresco se adapta a lo que hay en pantalla. En el mapa los
+       trenes se desplazan y hace falta un paso fino; en Trenes y Personal no
+       se mueve nada de forma continua, y refrescar cientos de elementos varias
+       veces por segundo dejaba el hilo ocupado: cada toque esperaba a que
+       terminara el redibujado y el cambio de menú se notaba lento.       */
+    const paso = tab === "mapa" || g.vel >= 10 ? 100 : 500;
+    const iv = setInterval(() => setG((p) => (p && p.marcha && !p.cola.length && !p.fin ? avanzar(p, (paso / 1000) * p.vel) : p)), paso);
     return () => clearInterval(iv);
-  }, [g && g.marcha, g && g.vel, g && g.fin, g && g.cola.length]);
+  }, [g && g.marcha, g && g.vel, g && g.fin, g && g.cola.length, tab]);
 
   if (pantalla === "portada")
     return (
@@ -4267,6 +4730,7 @@ export default function CGOC7() {
           const c = campanaNueva();
           setCamp(c);
           borrarCampana();
+          borrarPartida();
           fijarTurno(c.turno);
           setAsig(initAsignacion());
           setPantalla("asignacion");
@@ -4308,21 +4772,61 @@ export default function CGOC7() {
   const aviso = g.cola[0];
 
   if (g.fin) {
-    const nota = punt >= 92 && g.kpi.afect < 6000 ? "Turno notable" : punt >= 75 ? "Turno aceptable" : "Turno para revisar";
+    const b = balanceTurno(g);
+    const pts = puntosTurno(g);
+    /* Cinco niveles en vez de tres, y no solo por puntualidad: entran también
+       las circulaciones que llegan enteras y la proporción de afectados.  */
+    const nota =
+      pts >= 1050 ? "Turno impecable" : pts >= 900 ? "Turno notable" : pts >= 720 ? "Turno correcto" : pts >= 520 ? "Turno justo" : "Turno para revisar";
+    const media = modo === "campana" && camp && camp.acum.turnos ? camp.acum.puntos / camp.acum.turnos : null;
+    const dif = media === null ? null : Math.round(pts - media);
+
     return (
       <div style={ST.wrap}>
         <Fonts />
         <div style={ST.eyebrow}>Relevo de turno · {hhmm(FIN)}</div>
-        <h1 style={{ fontSize: T.cabecera, fontWeight: 700, letterSpacing: -1, margin: "4px 0 14px", lineHeight: 1.05 }}>{nota}</h1>
+
+        {/* la puntuación es lo que resume el turno: va primero y grande */}
+        <div style={{ display: "flex", alignItems: "baseline", gap: 8, margin: "4px 0 2px" }}>
+          <span style={{ fontSize: T.cartel, fontWeight: 800, letterSpacing: -2, fontFamily: MONO, color: pts >= 900 ? P.ok : pts >= 720 ? P.ink : pts >= 520 ? P.warn : P.alert }}>
+            {nf(pts)}
+          </span>
+          <span style={{ fontSize: T.base, color: P.muted }}>puntos</span>
+        </div>
+        <h1 style={{ fontSize: T.titulo, fontWeight: 700, letterSpacing: -0.6, margin: "0 0 4px" }}>{nota}</h1>
+        {dif !== null && (
+          <div style={{ fontSize: T.base, color: dif >= 0 ? P.ok : P.alert, marginBottom: 16 }}>
+            {dif >= 0 ? "+" : ""}
+            {nf(dif)} respecto a tu media de campaña
+          </div>
+        )}
+        {dif === null && <div style={{ height: 16 }} />}
+
+        {/* lo que cuenta el turno: viajeros llevados y cómo se les trató */}
+        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8, marginBottom: 8 }}>
+          <Kpi k="Viajeros transportados" v={nf(b.transportados)} c={P.ink} />
+          <Kpi k="Puntualidad" v={`${b.punt.toFixed(1)}%`} c={colPuntualidad(b.punt)} />
+        </div>
+        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 8, marginBottom: 8 }}>
+          <Kpi k="Retraso medio" v={`${b.retrasoMedio.toFixed(1)}′`} c={colRetrasoMedio(b.retrasoMedio)} small />
+          <Kpi k="Ocupación media" v={`${b.ocupMedia.toFixed(0)}%`} c={colOcupacion(b.ocupMedia)} small />
+          <Kpi k="Circulaciones" v={`${b.completas}/${CIRCULACIONES}`} c={b.completas === CIRCULACIONES ? P.ok : P.warn} small />
+        </div>
         <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 8, marginBottom: 16 }}>
-          <Kpi k="Puntualidad" v={`${punt.toFixed(1)}%`} c={colPuntualidad(punt)} />
-          <Kpi k="Afectados" v={nf(g.kpi.afect)} c={P.ink} />
-          <Kpi k="Coste extra" v={`${(g.kpi.coste / 1000).toFixed(1)}k €`} c={P.ink} />
+          <Kpi k="Afectados" v={`${nf(b.afect)}`} c={nivelCol(b.tasaAfect, 5, 15)} small />
+          <Kpi k="Coste extra" v={`${(b.coste / 1000).toFixed(1)}k €`} c={P.ink} small />
+          <Kpi k="Incidencias" v={String(b.incidencias)} c={P.ink} small />
         </div>
-        <div style={{ ...ST.card, padding: 12, marginBottom: 12, fontSize: T.alto }}>
-          {activos.length} de {CIRCULACIONES} circulaciones al cierre · {g.trenes.filter((t) => t.estado === "degradado").length} degradadas ·{" "}
-          {g.incCount} incidencia{g.incCount !== 1 ? "s" : ""}
-        </div>
+
+        {/* el peor momento del turno, que las medias esconden */}
+        {b.picoRetraso > 3 && (
+          <div style={{ ...ST.card, padding: 12, marginBottom: 12, fontSize: T.base, lineHeight: 1.5 }}>
+            Tu peor momento fueron las <strong>{hhmm(b.horaPico)}</strong>, con {b.picoRetraso.toFixed(0)} min de retraso medio.
+            {b.minutosApuro > 0 && ` Hubo trenes detenidos o retenidos durante ${b.minutosApuro} min del turno.`}
+            {b.tasaAfect > 0 && ` ${b.tasaAfect.toFixed(1)} de cada 100 viajeros se vieron afectados.`}
+          </div>
+        )}
+
         <div style={{ ...ST.card, padding: 12, maxHeight: 280, overflowY: "auto" }}>
           <div style={{ ...ST.eyebrow, marginBottom: 8 }}>Incidencias del turno</div>
           {g.log.filter((l) => l.k === "bad" || l.k === "aviso").map((l, i) => (
@@ -4331,15 +4835,6 @@ export default function CGOC7() {
               <span style={{ color: l.k === "bad" ? P.alert : P.warn }}>{l.t}</span>
             </div>
           ))}
-        </div>
-        <div style={{ ...ST.card, padding: 12, margin: "12px 0", display: "flex", alignItems: "center", gap: 12 }}>
-          <span style={{ fontSize: T.base, color: P.muted, flex: 1, lineHeight: 1.4 }}>
-            Puntuación del turno
-            {modo === "campana" && camp ? ` · acumulado ${nf(camp.acum.puntos + puntosTurno(g))}` : ""}
-          </span>
-          <span style={{ fontSize: T.cabecera, fontWeight: 700, fontFamily: MONO, color: puntosTurno(g) >= 800 ? P.ok : puntosTurno(g) >= 500 ? P.warn : P.alert }}>
-            {nf(puntosTurno(g))}
-          </span>
         </div>
 
         <button
@@ -4354,11 +4849,11 @@ export default function CGOC7() {
             } else {
               setAsig(initAsignacion());
             }
+            borrarPartida(); // el turno ya está cerrado: no hay que reanudarlo
             setG(null);
-            // en campaña se enlaza directamente con el turno siguiente
             setPantalla(modo === "campana" ? "asignacion" : "portada");
           }}
-          style={{ ...ST.btn(true), width: "100%", padding: "14px 0", fontSize: T.alto }}
+          style={{ ...ST.btn(true), width: "100%", marginTop: 12, padding: "14px 0", fontSize: T.alto }}
         >
           {modo === "campana" ? "Cerrar turno y continuar" : "Terminar partida"}
         </button>
@@ -4370,7 +4865,11 @@ export default function CGOC7() {
     <div style={ST.wrap}>
       <Fonts />
       {/* la barra fija hace de cabecera: el resto de la pantalla scrollea bajo ella */}
-      <BarraMando g={g} setG={setG} tab={tab} setTab={setTab} />
+      {/* datos arriba, mando abajo: se mira arriba y se toca abajo */}
+      <BarraDatos g={g} />
+      <div style={{ height: "calc(42px + env(safe-area-inset-top))" }} />
+
+      <BarraMando g={g} setG={setG} tab={tab} setTab={setTab} setAjustes={setAjustes} />
 
       {tab === "trenes" && <Trenes g={g} verEnMapa={(n) => { saltarSubida.current = true; setFocoTren(n); setTab("mapa"); }} setRotarDe={setRotarDe} setTrenSel={setTrenSel} setVolverA={setVolverA} setApartarDe={setApartarDe} setSuprimirDe={setSuprimirDe} setReponerDe={setReponerDe} setApartaderoDe={setApartaderoDe} setUnidadSel={setUnidadSel} />}
       {tab === "personal" && <Personal g={g} />}
@@ -4402,6 +4901,118 @@ export default function CGOC7() {
       {suprimirDe !== null && <SelectorSupresion g={g} setG={setG} i={suprimirDe} close={() => setSuprimirDe(null)} />}
       {reponerDe !== null && <SelectorReposicion g={g} setG={setG} i={reponerDe} close={() => setReponerDe(null)} />}
       {apartaderoDe !== null && <SelectorApartadero g={g} setG={setG} i={apartaderoDe} close={() => setApartaderoDe(null)} />}
+      {/* confirmación breve tras guardar, sin interrumpir la partida */}
+      {confirmacion && (
+        <div
+          onClick={() => setConfirmacion(null)}
+          style={{ position: "fixed", left: 0, right: 0, bottom: 96, display: "flex", justifyContent: "center", zIndex: 60, pointerEvents: "auto" }}
+        >
+          <div style={{ ...ST.card, boxShadow: SOMBRA.elevado, padding: "10px 16px", maxWidth: 460, margin: "0 12px", fontSize: T.base, lineHeight: 1.4 }}>{confirmacion}</div>
+        </div>
+      )}
+
+      {/* Ajustes. De momento el tema y las dos acciones de partida; es el sitio
+          natural para lo que vaya surgiendo.                            */}
+      {ajustes && (
+        <div
+          onClick={() => setAjustes(false)}
+          style={{ position: "fixed", inset: 0, background: "rgba(10,14,17,.45)", animation: "cgo-fondo .18s ease-out", display: "flex", alignItems: "flex-end", justifyContent: "center", zIndex: 69 }}
+        >
+          <div
+            onClick={(ev) => ev.stopPropagation()}
+            style={{ background: P.surface, width: "100%", maxWidth: 540, borderRadius: `${R.grande + 2}px ${R.grande + 2}px 0 0`, padding: 16, boxShadow: SOMBRA.hoja, animation: "cgo-hoja .22s ease-out" }}
+          >
+            <Asa close={() => setAjustes(false)} />
+            <div style={ST.eyebrow}>Ajustes</div>
+            <h2 style={{ fontSize: T.titulo, fontWeight: 700, letterSpacing: -0.5, margin: "4px 0 16px" }}>Preferencias y partida</h2>
+
+            <div style={{ ...ST.eyebrow, marginBottom: 8 }}>Aspecto</div>
+            <div style={{ display: "flex", gap: 6, marginBottom: 20 }}>
+              {[
+                { k: "auto", l: "Automático" },
+                { k: "claro", l: "Diurno" },
+                { k: "oscuro", l: "Nocturno" },
+              ].map((o) => (
+                <button
+                  key={o.k}
+                  onClick={() => setTema(o.k)}
+                  style={{
+                    flex: 1,
+                    background: tema === o.k ? P.solido : P.surface,
+                    color: tema === o.k ? P.blanco : P.ink,
+                    border: `1px solid ${tema === o.k ? P.ink : P.rule}`,
+                    borderRadius: R.normal,
+                    padding: 12,
+                    fontFamily: "inherit",
+                    fontSize: T.base,
+                    fontWeight: 700,
+                    cursor: "pointer",
+                  }}
+                >
+                  {o.l}
+                </button>
+              ))}
+            </div>
+            <div style={{ fontSize: T.aux, color: P.muted, marginTop: -14, marginBottom: 20, lineHeight: 1.45 }}>
+              En automático sigue lo que tenga configurado el dispositivo.
+            </div>
+
+            <div style={{ ...ST.eyebrow, marginBottom: 8 }}>Partida</div>
+            <button
+              onClick={() => {
+                guardarPartida(g, modo, tab);
+                setAjustes(false);
+                setConfirmacion("Turno guardado. Puedes cerrar la aplicación y retomarlo donde lo dejaste.");
+              }}
+              style={{ width: "100%", background: P.surface, color: P.ink, border: `1px solid ${P.rule}`, borderRadius: R.normal, padding: 12, fontFamily: "inherit", fontWeight: 700, fontSize: T.base, cursor: "pointer", marginBottom: 8 }}
+            >
+              Guardar partida
+            </button>
+            <button
+              onClick={() => {
+                setAjustes(false);
+                setCerrarPartida(true);
+              }}
+              style={{ width: "100%", background: P.surface, color: P.alert, border: `1px solid ${P.alert}`, borderRadius: R.normal, padding: 12, fontFamily: "inherit", fontWeight: 700, fontSize: T.base, cursor: "pointer" }}
+            >
+              Salir de la partida
+            </button>
+          </div>
+        </div>
+      )}
+
+      {/* cerrar abandona el turno: se pregunta antes, porque no tiene vuelta */}
+      {cerrarPartida && (
+        <div style={{ position: "fixed", inset: 0, background: "rgba(10,14,17,.5)", animation: "cgo-fondo .18s ease-out", display: "flex", alignItems: "center", justifyContent: "center", padding: 16, zIndex: 70 }}>
+          <div style={{ ...ST.card, padding: 16, maxWidth: 420, width: "100%", boxShadow: SOMBRA.hoja, animation: "cgo-hoja .22s ease-out" }}>
+            <div style={ST.eyebrow}>Cerrar partida</div>
+            <h2 style={{ fontSize: T.titulo, fontWeight: 700, letterSpacing: -0.5, margin: "4px 0 8px" }}>¿Abandonar el turno en curso?</h2>
+            <p style={{ fontSize: T.base, color: P.muted, lineHeight: 1.5, marginTop: 0 }}>
+              El turno se perderá y volverás a la portada. La campaña guardada se conserva: podrás retomarla desde el último turno cerrado.
+            </p>
+            <div style={{ display: "flex", gap: 8, marginTop: 16 }}>
+              <button
+                onClick={() => setCerrarPartida(false)}
+                style={{ flex: 1, background: P.surface, color: P.ink, border: `1px solid ${P.rule}`, borderRadius: R.normal, padding: 12, fontFamily: "inherit", fontWeight: 700, fontSize: T.base, cursor: "pointer" }}
+              >
+                Seguir jugando
+              </button>
+              <button
+                onClick={() => {
+                  borrarPartida();
+                  setCerrarPartida(false);
+                  setG(null);
+                  setPantalla("portada");
+                }}
+                style={{ flex: 1, background: P.alert, color: P.blanco, border: "none", borderRadius: R.normal, padding: 12, fontFamily: "inherit", fontWeight: 700, fontSize: T.base, cursor: "pointer" }}
+              >
+                Cerrar partida
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
       {vacioDe && <SelectorVacio g={g} setG={setG} idx={vacioDe.idx} via={vacioDe.via} close={() => setVacioDe(null)} />}
 
       {gestionUd && <SelectorTaller g={g} setG={setG} id={gestionUd} close={() => setGestionUd(null)} />}
@@ -4939,7 +5550,7 @@ function Seleccion({ modo, camp, cargando, atras, empezar, nueva }) {
                   onClick={() => setTurno(t.id)}
                   style={{
                     flex: 1,
-                    background: sel && t.ok ? P.ink : P.surface,
+                    background: sel && t.ok ? P.solido : P.surface,
                     color: sel && t.ok ? P.blanco : P.ink,
                     border: `1px solid ${sel && t.ok ? P.ink : P.rule}`,
                     borderRadius: R.grande,
@@ -5064,6 +5675,35 @@ function Relevo({ asig, camp, empezar }) {
         </div>
       )}
 
+      {/* Estado de la flota. El mantenimiento dependía de que el jugador se
+          acordara de ir al taller: en veinte turnos simulados no entró ni una
+          unidad después del primer día. Aquí aparece la decisión sola.   */}
+      {(() => {
+        if (!camp) return null;
+        const desgastadas = CATALOGO.filter((u) => !camp.taller[u.id] && (camp.desg[u.id] || u.desgaste) >= 85);
+        const averiadas = camp.averiadas.length;
+        const enTaller = Object.keys(camp.taller).length;
+        const listas = Object.values(camp.taller).filter((v) => v.restan <= 0).length;
+        if (!desgastadas.length && !averiadas && !enTaller) return null;
+        return (
+          <div style={{ ...ST.card, padding: 12, marginBottom: 12, borderColor: desgastadas.length || averiadas ? P.warn : P.rule }}>
+            <div style={{ ...ST.eyebrow, marginBottom: 8 }}>Estado de la flota</div>
+            <div style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: 8 }}>
+              <Kpi k="Pasadas de ciclo" v={String(desgastadas.length)} c={desgastadas.length ? P.warn : P.ok} small />
+              <Kpi k="Averiadas" v={String(averiadas)} c={averiadas ? P.alert : P.ok} small />
+              <Kpi k="En taller" v={`${enTaller}${listas ? ` · ${listas} listas` : ""}`} c={P.ink} small />
+            </div>
+            {(desgastadas.length > 0 || averiadas > 0) && (
+              <div style={{ fontSize: T.aux, color: P.muted, marginTop: 8, lineHeight: 1.45 }}>
+                {desgastadas.length > 0 && `${desgastadas.length} unidad${desgastadas.length === 1 ? "" : "es"} por encima del 85 % de desgaste. `}
+                {averiadas > 0 && `${averiadas} averiada${averiadas === 1 ? "" : "s"} sin reparar. `}
+                Puedes mandarlas a revisión desde la pantalla de Taller.
+              </div>
+            )}
+          </div>
+        );
+      })()}
+
       <div style={ST.eyebrow}>Composiciones en servicio</div>
       <div style={{ ...ST.card, padding: 12, margin: "6px 0 10px" }}>
         {comps.map((c, k) => (
@@ -5125,7 +5765,7 @@ function Asignacion({ asig, setAsig, slotSel, setSlotSel, empezar, camp }) {
     <div style={ST.wrap}>
       <Fonts />
       <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 4 }}>
-        <span style={{ background: ROJO, color: P.blanco, fontSize: T.titulo, fontWeight: 700, padding: "2px 9px", borderRadius: R.normal }}>C-7</span>
+        <span style={{ background: COLOR.rojo, color: P.blanco, fontSize: T.titulo, fontWeight: 700, padding: "2px 9px", borderRadius: R.normal }}>C-7</span>
         <div style={{ lineHeight: 1.1 }}>
           <div style={{ fontSize: T.base, fontWeight: 700 }}>Asignación de material</div>
           <div style={{ fontSize: T.aux, color: P.muted }}>Antes de abrir el turno de mañana</div>
@@ -5186,7 +5826,7 @@ function Asignacion({ asig, setAsig, slotSel, setSlotSel, empezar, camp }) {
         return (
           <div key={i} style={{ ...ST.card, padding: 12, marginBottom: 8, borderColor: lista ? P.rule : P.warn }}>
             <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 8 }}>
-              <div style={{ width: 20, height: 22, background: ROJO, borderRadius: R.menudo, color: P.blanco, fontSize: T.aux, fontWeight: 700, fontFamily: MONO, display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 }}>
+              <div style={{ width: 20, height: 22, background: COLOR.rojo, borderRadius: R.menudo, color: P.blanco, fontSize: T.aux, fontWeight: 700, fontFamily: MONO, display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 }}>
                 {i + 1}
               </div>
               <span style={{ fontSize: T.base, fontWeight: 700 }}>Circulación {i + 1}</span>
@@ -5296,8 +5936,11 @@ function Asignacion({ asig, setAsig, slotSel, setSlotSel, empezar, camp }) {
         <SelectorUnidad
           camp={camp}
           usadas={usadas}
-          actual={(slotSel.apart ? asig.apart[slotSel.apart] : asig.slots[slotSel.i])[slotSel.j]}
-          pareja={(slotSel.apart ? asig.apart[slotSel.apart] : asig.slots[slotSel.i])[slotSel.j === 0 ? 1 : 0]}
+          // la vía puede no estar aún en el mapa de apartados: desde el día 2
+          // el turno abre con 'apart' vacío, y pedir [j] de algo inexistente
+          // dejaba la pantalla en blanco
+          actual={(slotSel.apart ? asig.apart[slotSel.apart] || [null, null] : asig.slots[slotSel.i])[slotSel.j]}
+          pareja={(slotSel.apart ? asig.apart[slotSel.apart] || [null, null] : asig.slots[slotSel.i])[slotSel.j === 0 ? 1 : 0]}
           primera={slotSel.j === 0}
           soloSeries={slotSel.series}
           close={() => setSlotSel(null)}
@@ -5360,7 +6003,7 @@ function SelectorUnidad({ usadas, actual, pareja, primera, soloSeries, close, el
                 onClick={() => cambiarSerie(s)}
                 style={{
                   flex: 1,
-                  background: serie === s ? P.ink : P.surface,
+                  background: serie === s ? P.solido : P.surface,
                   color: serie === s ? P.blanco : P.ink,
                   border: `1px solid ${serie === s ? P.ink : P.rule}`,
                   borderRadius: R.normal,
@@ -5396,7 +6039,7 @@ function SelectorUnidad({ usadas, actual, pareja, primera, soloSeries, close, el
                 key={d}
                 onClick={() => setDep(d)}
                 style={{
-                  background: dep === d ? P.ink : P.surface,
+                  background: dep === d ? P.solido : P.surface,
                   color: dep === d ? P.blanco : P.ink,
                   border: `1px solid ${dep === d ? P.ink : P.rule}`,
                   borderRadius: R.pastilla,
@@ -5430,7 +6073,7 @@ function SelectorUnidad({ usadas, actual, pareja, primera, soloSeries, close, el
                 display: "block",
                 width: "100%",
                 textAlign: "left",
-                background: sel ? P.ink : P.surface,
+                background: sel ? P.solido : P.surface,
                 color: sel ? P.blanco : P.ink,
                 border: `1px solid ${P.rule}`,
                 borderRadius: R.normal,
@@ -5476,11 +6119,30 @@ function SelectorUnidad({ usadas, actual, pareja, primera, soloSeries, close, el
 /* ── trenes ─────────────────────────────────────────────────── */
 
 function Trenes({ g, setRotarDe, setTrenSel, setVolverA, setApartarDe, setSuprimirDe, setReponerDe, setApartaderoDe, setUnidadSel, verEnMapa }) {
+  /* Valoraciones del maquinista, desplegables desde su nombre. Se guarda solo
+     cuál está abierta: al cambiar de pantalla el componente se desmonta y se
+     ocultan solas.                                                       */
+  const [verMaq, setVerMaq] = useState(null);
+  /* Al cerrarse, el bloque sigue montado un instante para que se vea salir:
+     si se desmonta en el acto desaparece de golpe y el gesto queda cojo.
+     Se mantienen abiertas hasta que se vuelve a pulsar el nombre.       */
+  const [cerrando, setCerrando] = useState(null);
+  const alternarMaq = (i) => {
+    setCerrando(verMaq);
+    setVerMaq(verMaq === i ? null : i);
+    setTimeout(() => setCerrando(null), 280); // algo más que la animación de cierre
+  };
+  /* Índice de maquinistas por identificador: cada ficha lo buscaba recorriendo
+     la plantilla entera, y con trece fichas y cuarenta y seis maquinistas eso
+     son seiscientas comparaciones por refresco.                          */
+  const porId = {};
+  for (const m of g.personal) porId[m.id] = m;
+
   return (
     <div>
       {g.trenes.map((t) => {
         const s = situacion(t, g.reloj);
-        const m = t.maq ? g.personal.find((x) => x.id === t.maq) : null;
+        const m = t.maq ? porId[t.maq] : null;
         const supr = t.estado === "suprimido";
         const borde = supr ? P.rule : t.retenido || t.excesoAutorizado ? P.alert : t.detenido || t.esperaCab || t.retraso > 8 ? P.warn : P.rule;
 
@@ -5506,7 +6168,22 @@ function Trenes({ g, setRotarDe, setTrenSel, setVolverA, setApartarDe, setSuprim
             ? `${describir(s)} · detrás del ${numeroTren(g.trenes.find((x) => x.i === t.bloqueadoPor), g.reloj)}`
             : describir(s);
         return (
-          <div key={t.i} style={{ ...ST.card, borderColor: borde, padding: 12, marginBottom: 8, opacity: supr ? 0.5 : 1 }}>
+          /* El navegador se salta el trabajo de las fichas que quedan fuera
+             de la pantalla. Con trece fichas de 214 px solo caben tres o
+             cuatro a la vez: el resto no necesita medirse ni pintarse en cada
+             refresco, que era el grueso del coste de esta pantalla.     */
+          <div
+            key={t.i}
+            style={{
+              ...ST.card,
+              borderColor: borde,
+              padding: 12,
+              marginBottom: 8,
+              opacity: supr ? 0.5 : 1,
+              contentVisibility: "auto",
+              containIntrinsicSize: "0 214px",
+            }}
+          >
             <div onClick={() => { setVolverA(null); setTrenSel(t.i); }} style={{ display: "flex", alignItems: "center", gap: 12, cursor: "pointer" }}>
               {/* la flecha representa la posición, así que lleva al mapa;
                   el resto de la ficha sigue abriendo el perfil del tren */}
@@ -5520,7 +6197,7 @@ function Trenes({ g, setRotarDe, setTrenSel, setVolverA, setApartarDe, setSuprim
                   cursor: "pointer",
                   width: 25,
                   height: 30,
-                  background: supr || t.rotando || t.detenido || t.esperaCab ? P.muted : t.esVacio ? P.ink : ROJO,
+                  background: supr || t.rotando || t.detenido || t.esperaCab ? P.muted : t.esVacio ? P.solido : COLOR.rojo,
                   clipPath: supr || t.rotando || t.detenido || t.esperaCab ? "none" : s.dir === "pio" ? CLIP_SUBE : CLIP_BAJA,
                   borderRadius: R.menudo,
                   color: P.blanco,
@@ -5544,7 +6221,7 @@ function Trenes({ g, setRotarDe, setTrenSel, setVolverA, setApartarDe, setSuprim
                       fontSize: T.menor,
                       fontWeight: 700,
                       color: P.blanco,
-                      background: t.esVacio ? P.ink : LIN[LINEA],
+                      background: t.esVacio ? P.solido : LIN[LINEA],
                       borderRadius: R.menudo,
                       padding: "1px 5px",
                       fontFamily: MONO,
@@ -5553,8 +6230,10 @@ function Trenes({ g, setRotarDe, setTrenSel, setVolverA, setApartarDe, setSuprim
                   >
                     {t.esVacio ? "MV" : LINEA}
                   </span>
-                  <span style={{ fontSize: T.alto, fontWeight: 700, fontFamily: MONO, letterSpacing: -0.3 }}>{numeroTren(t, g.reloj)}</span>
-                  <span style={{ fontSize: T.menor, color: P.muted, letterSpacing: 0.4 }}>{t.esVacio ? "material vacío" : `circ. ${t.i}`}</span>
+                  <span style={{ fontSize: T.alto, fontWeight: 800, fontFamily: MONO, letterSpacing: -0.4 }}>{numeroTren(t, g.reloj)}</span>
+                  <span style={{ fontSize: T.micro, color: P.muted, fontWeight: 600, letterSpacing: 0.8, textTransform: "uppercase" }}>
+                    {t.esVacio ? "material vacío" : `circ. ${t.i}`}
+                  </span>
                 </div>
                 {/* Altura de línea cerrada. La flecha → no existe en Archivo y el
                     navegador la toma de otra tipografía con métricas mayores: al
@@ -5563,7 +6242,7 @@ function Trenes({ g, setRotarDe, setTrenSel, setVolverA, setApartarDe, setSuprim
                 <div
                   style={{
                     fontSize: T.base,
-                    fontWeight: 600,
+                    fontWeight: 700,
                     whiteSpace: "nowrap",
                     overflow: "hidden",
                     textOverflow: "ellipsis",
@@ -5574,7 +6253,7 @@ function Trenes({ g, setRotarDe, setTrenSel, setVolverA, setApartarDe, setSuprim
                 >
                   {txt}
                 </div>
-                <div style={{ fontSize: T.aux, color: P.muted, fontFamily: MONO, marginTop: 4, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis", lineHeight: "15px", height: 15 }}>
+                <div style={{ fontSize: T.menor, color: P.muted, fontFamily: MONO, marginTop: 4, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis", lineHeight: "15px", height: 15 }}>
                   {t.unidades.length === 0 && "sin material"}
                   {t.unidades.map((u, k) => (
                     <span key={u.id}>
@@ -5584,7 +6263,9 @@ function Trenes({ g, setRotarDe, setTrenSel, setVolverA, setApartarDe, setSuprim
                           ev.stopPropagation();
                           setUnidadSel(u.id);
                         }}
-                        style={{ cursor: "pointer", borderBottom: `1px dotted ${P.rule}`, color: P.ink }}
+                        // pulsable, pero sin subrayado: en un listado denso el
+                        // punteado ensuciaba más de lo que orientaba
+                        style={{ cursor: "pointer", color: P.ink }}
                       >
                         {u.id}
                       </span>
@@ -5614,7 +6295,7 @@ function Trenes({ g, setRotarDe, setTrenSel, setVolverA, setApartarDe, setSuprim
               </div>
             </div>
 
-            {(t.rotacion || t.limitacion > 0 || t.retirarCab || t.cambio || t.apartaPaso || t.supresion || t.vacio || t.pendienteApartar || t.bloqueadoPor) && (
+            {(t.rotacion || t.limitacion > 0 || t.retirarCab || t.cambio || t.apartaPaso || t.supresion || t.vacio || t.pendienteApartar || t.carteristas || t.bloqueadoPor) && (
               <div style={{ marginTop: 12, display: "flex", gap: 4, flexWrap: "nowrap", overflow: "hidden", alignItems: "center" }}>
                 {t.rotacion && <Etiqueta txt={`Rotación en ${ESTACIONES[t.rotacion.idx].corto}`} c={P.warn} />}
                 {t.limitacion > 0 && <Etiqueta txt={`Marcha limitada +${t.limitacion}′`} c={P.warn} />}
@@ -5640,16 +6321,29 @@ function Trenes({ g, setRotarDe, setTrenSel, setVolverA, setApartarDe, setSuprim
                     <Etiqueta txt={`Detrás del ${numeroTren(g.trenes.find((x) => x.i === t.bloqueadoPor), g.reloj)}`} c={P.alert} />
                   )}
                 {t.retirarCab && <Etiqueta txt="Retirada en cabecera" c={P.alert} />}
+                {t.carteristas && <Etiqueta txt="Carteristas a bordo" c={P.alert} />}
               </div>
             )}
 
             {!supr && m && (
               <div style={{ marginTop: 8, paddingTop: 8, borderTop: `1px solid ${P.sunken}`, display: "flex", justifyContent: "space-between", alignItems: "center", gap: 12 }}>
                 <div style={{ minWidth: 0 }}>
-                  <div style={{ fontSize: T.base, fontWeight: 600, display: "flex", alignItems: "center", gap: 8 }}>
+                  <button
+                    onClick={() => alternarMaq(t.i)}
+                    title="Ver valoraciones"
+                    style={{
+                      all: "unset",
+                      cursor: "pointer",
+                      fontSize: T.aux,
+                      fontWeight: 600,
+                      display: "flex",
+                      alignItems: "center",
+                      gap: 8,
+                    }}
+                  >
                     {m.nombre}
                     <Media m={m} />
-                  </div>
+                  </button>
                   <div style={{ fontSize: T.aux, color: t.excesoAutorizado ? P.alert : P.muted }}>
                     {t.excesoAutorizado ? "Conduciendo por encima del límite" : t.relevo ? `Relevo ${hhmm(t.relevo.prevista)} · ${t.relevo.cab}` : "Sin relevo en el turno"}
                   </div>
@@ -5662,6 +6356,12 @@ function Trenes({ g, setRotarDe, setTrenSel, setVolverA, setApartarDe, setSuprim
                 </div>
               </div>
             )}
+
+            {/* Valoraciones del maquinista. Se montan solo al abrirlas: tener
+                los trece bloques siempre presentes, aunque plegados, era
+                trabajo que se rehacía en cada refresco sin que nadie lo
+                viera.                                                    */}
+            {!supr && m && (verMaq === t.i || cerrando === t.i) && <Atributos m={m} plegable saliendo={cerrando === t.i && verMaq !== t.i} />}
 
             {/* las tres acciones de mando siempre presentes mientras circule */}
             {!supr && (
@@ -5846,21 +6546,38 @@ function SelectorApartado({ g, setG, i, close }) {
 function Personal({ g }) {
   const [info, setInfo] = useState(null);
   const verInfo = (k) => setInfo((x) => (x === k ? null : k));
-  const nom = (e) => g.personal.filter((m) => m.tipo === "nominal" && m.estado === e);
-  const res = (cab) => g.personal.filter((m) => m.tipo === "reserva" && m.estado === "reserva" && m.lugar === cab);
-  const grupos = [
-    ["Conduciendo", g.personal.filter((m) => m.estado === "conduciendo")],
-    ["Nominales pendientes de entrar", nom("entrante")],
-    [`Reserva en ${CHAMARTIN}`, res(CHAMARTIN)],
-    [`Reserva en ${ALCALA}`, res(ALCALA)],
-    [`Reserva en ${PIO}`, res(PIO)],
-    // maquinistas que van de viajero a hacerse cargo de material apartado
-    ["De viajero hacia el material", g.personal.filter((m) => m.estado === "enViaje")],
-    ["Agente acompañante", g.personal.filter((m) => m.estado === "acompanante")],
-    ["En maniobras", g.personal.filter((m) => m.estado === "maniobras")],
-    ["En descanso", g.personal.filter((m) => m.estado === "descanso")],
-    ["Jornada finalizada", g.personal.filter((m) => m.estado === "fin")],
-  ];
+  /* Los grupos se pliegan. Con cuarenta y seis maquinistas, tener todas las
+     fichas y sus valoraciones desplegadas eran cientos de elementos que se
+     rehacían en cada refresco, y la pantalla se volvía pesada de manejar.
+     Arrancan abiertos los dos que importan durante la partida.          */
+  const [abiertos, setAbiertos] = useState({ Conduciendo: true, "Nominales pendientes de entrar": true });
+  const plegar = (k) => setAbiertos((x) => ({ ...x, [k]: !x[k] }));
+  /* Una sola pasada por la plantilla en vez de diez: con cuarenta y seis
+     maquinistas, recorrerla una vez por grupo multiplicaba el trabajo en
+     cada refresco.                                                       */
+  const grupos = (() => {
+    const cubo = { conduciendo: [], entrante: [], enViaje: [], acompanante: [], maniobras: [], descanso: [], fin: [] };
+    const reservas = { [CHAMARTIN]: [], [ALCALA]: [], [PIO]: [] };
+    for (const m of g.personal) {
+      if (m.tipo === "reserva" && m.estado === "reserva") {
+        if (reservas[m.lugar]) reservas[m.lugar].push(m);
+      } else if (m.tipo === "nominal" && m.estado === "entrante") cubo.entrante.push(m);
+      else if (cubo[m.estado]) cubo[m.estado].push(m);
+    }
+    return [
+      ["Conduciendo", cubo.conduciendo],
+      ["Nominales pendientes de entrar", cubo.entrante],
+      [`Reserva en ${CHAMARTIN}`, reservas[CHAMARTIN]],
+      [`Reserva en ${ALCALA}`, reservas[ALCALA]],
+      [`Reserva en ${PIO}`, reservas[PIO]],
+      // maquinistas que van de viajero a hacerse cargo de material apartado
+      ["De viajero hacia el material", cubo.enViaje],
+      ["Agente acompañante", cubo.acompanante],
+      ["En maniobras", cubo.maniobras],
+      ["En descanso", cubo.descanso],
+      ["Jornada finalizada", cubo.fin],
+    ];
+  })();
   return (
     <div>
       <div style={{ ...ST.card, padding: "9px 11px", marginBottom: 12, fontSize: T.aux, color: P.muted, lineHeight: 1.45 }}>
@@ -5868,7 +6585,7 @@ function Personal({ g }) {
           <button
             onClick={() => verInfo("relevos")}
             style={{
-              background: info === "relevos" ? P.ink : P.surface,
+              background: info === "relevos" ? P.solido : P.surface,
               color: info === "relevos" ? P.blanco : P.ink,
               border: `1px solid ${info === "relevos" ? P.ink : P.rule}`,
               borderRadius: "50%",
@@ -5905,7 +6622,7 @@ function Personal({ g }) {
               key={k}
               onClick={() => verInfo(k)}
               style={{
-                background: info === k ? P.ink : P.surface,
+                background: info === k ? P.solido : P.surface,
                 color: info === k ? P.blanco : P.ink,
                 border: `1px solid ${info === k ? P.ink : P.rule}`,
                 borderRadius: R.pastilla,
@@ -5922,7 +6639,7 @@ function Personal({ g }) {
           <button
             onClick={() => verInfo("todos")}
             style={{
-              background: info === "todos" ? P.ink : P.surface,
+              background: info === "todos" ? P.solido : P.surface,
               color: info === "todos" ? P.blanco : P.ink,
               border: `1px solid ${info === "todos" ? P.ink : P.rule}`,
               borderRadius: "50%",
@@ -5955,12 +6672,31 @@ function Personal({ g }) {
       </div>
       {grupos.map(([titulo, lista]) => (
         <div key={titulo} style={{ marginBottom: 12 }}>
-          <div style={{ fontSize: T.aux, letterSpacing: 1.4, textTransform: "uppercase", color: P.muted, fontWeight: 700, marginBottom: 8 }}>
+          <button
+            onClick={() => plegar(titulo)}
+            style={{
+              all: "unset",
+              cursor: "pointer",
+              width: "100%",
+              boxSizing: "border-box",
+              display: "flex",
+              alignItems: "center",
+              gap: 6,
+              fontSize: T.aux,
+              letterSpacing: 1.4,
+              textTransform: "uppercase",
+              color: P.muted,
+              fontWeight: 700,
+              marginBottom: 8,
+            }}
+          >
+            <span style={{ display: "inline-block", width: 10, transform: abiertos[titulo] ? "rotate(90deg)" : "none", transition: "transform .15s ease" }}>›</span>
             {titulo} · {lista.length}
-          </div>
-          {lista.length === 0 && <div style={{ fontSize: T.base, color: P.muted, paddingLeft: 2 }}>—</div>}
-          {lista.map((m) => (
-            <div key={m.id} style={{ ...ST.card, padding: "9px 11px", marginBottom: 4 }}>
+          </button>
+          {abiertos[titulo] && lista.length === 0 && <div style={{ fontSize: T.base, color: P.muted, paddingLeft: 2 }}>—</div>}
+          {abiertos[titulo] &&
+            lista.map((m) => (
+            <div key={m.id} style={{ ...ST.card, padding: "9px 11px", marginBottom: 4, contentVisibility: "auto", containIntrinsicSize: "0 92px" }}>
               <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline" }}>
                 <span style={{ fontSize: T.base, fontWeight: 600, display: "flex", alignItems: "center", gap: 8 }}>
                   {m.nombre}
@@ -5998,6 +6734,9 @@ function Personal({ g }) {
 function Mapa({ g, detalle, setDetalle, setEstSel, setTrenSel, setVolverA, foco, setFoco }) {
   // el realce se mantiene hasta que se toca el mapa, no se apaga solo
   const quitarFoco = () => foco && setFoco(null);
+  // los tres desplegables de consulta: solo uno abierto a la vez
+  const [panel, setPanel] = useState(null);
+  const abrir = (k) => setPanel((x) => (x === k ? null : k));
   /* Al llegar desde la flecha de un tren se centra la vista en su posición.
      El aviso se borra en cuanto se ha usado, para no volver a arrastrar la
      pantalla en cada minuto de simulación.                              */
@@ -6040,20 +6779,59 @@ function Mapa({ g, detalle, setDetalle, setEstSel, setTrenSel, setVolverA, foco,
 
   return (
     <div onPointerDown={quitarFoco}>
-      <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 8 }}>
-        <div style={{ display: "flex", gap: 12, flex: 1, fontSize: T.aux, color: P.muted, flexWrap: "wrap" }}>
+      {/* La leyenda se consulta una vez y estorba el resto del tiempo: ocupaba
+          cuatro líneas encima del mapa en cada partida.                  */}
+      {/* Tres botones iguales repartidos a lo ancho. Solo se abre uno a la vez:
+          apilar los tres desplazaría el mapa fuera de la pantalla.       */}
+      <div style={{ display: "flex", gap: 6, marginBottom: 8 }}>
+        {[
+          { k: "info", l: "Info de línea", activo: panel === "info", pulsa: () => abrir("info") },
+          { k: "leyenda", l: "Leyenda", activo: panel === "leyenda", pulsa: () => abrir("leyenda") },
+          // al revés que los otros: negro cuando están ocultas, gris al mostrarlas
+          { k: "corresp", l: "Correspondencias", activo: !detalle, pulsa: () => setDetalle(!detalle) },
+        ].map((b2) => (
+          <button
+            key={b2.k}
+            onClick={b2.pulsa}
+            style={{
+              flex: 1,
+              minWidth: 0,
+              background: b2.activo ? P.solido : P.surface,
+              color: b2.activo ? P.blanco : P.ink,
+              border: `1px solid ${b2.activo ? P.ink : P.rule}`,
+              borderRadius: R.normal,
+              padding: "7px 4px",
+              fontFamily: "inherit",
+              fontSize: T.aux,
+              fontWeight: 600,
+              cursor: "pointer",
+              whiteSpace: "nowrap",
+              overflow: "hidden",
+              textOverflow: "ellipsis",
+            }}
+          >
+            {b2.l}
+          </button>
+        ))}
+      </div>
+
+      {panel === "info" && <InfoLinea />}
+
+      {panel === "leyenda" && (
+        <div style={{ ...ST.card, padding: 12, marginBottom: 8, display: "flex", gap: 12, fontSize: T.aux, color: P.muted, flexWrap: "wrap", animation: "cgo-entra .2s ease-out" }}>
+
           <span style={{ display: "flex", alignItems: "center", gap: 4 }}>
             {/* los símbolos de la leyenda usan el mismo trazo que el esquema */}
-            <span style={{ width: 18, height: 10, border: `3px solid ${ROJO}`, borderRadius: R.pastilla, display: "inline-block", background: P.surface, boxSizing: "border-box" }} /> estación
+            <span style={{ width: 18, height: 10, border: `3px solid ${COLOR.rojo}`, borderRadius: R.pastilla, display: "inline-block", background: P.surface, boxSizing: "border-box" }} /> estación
           </span>
           <span style={{ display: "flex", alignItems: "center", gap: 4 }}>
-            <span style={{ width: 18, height: 3, background: ROJO, borderRadius: R.hilo, display: "inline-block" }} /> apeadero
+            <span style={{ width: 18, height: 3, background: COLOR.rojo, borderRadius: R.hilo, display: "inline-block" }} /> apeadero
           </span>
           <span style={{ display: "flex", alignItems: "center", gap: 4 }}>
-            <span style={{ width: 10, height: 13, background: ROJO, clipPath: CLIP_BAJA, display: "inline-block" }} /> Alcalá
+            <span style={{ width: 10, height: 13, background: COLOR.rojo, clipPath: CLIP_BAJA, display: "inline-block" }} /> Alcalá
           </span>
           <span style={{ display: "flex", alignItems: "center", gap: 4 }}>
-            <span style={{ width: 10, height: 13, background: ROJO, clipPath: CLIP_SUBE, display: "inline-block" }} /> P. Pío
+            <span style={{ width: 10, height: 13, background: COLOR.rojo, clipPath: CLIP_SUBE, display: "inline-block" }} /> P. Pío
           </span>
           <span style={{ display: "flex", alignItems: "center", gap: 4 }}>⇄ vía desviada</span>
           <span style={{ display: "flex", alignItems: "center", gap: 4 }}>
@@ -6064,11 +6842,13 @@ function Mapa({ g, detalle, setDetalle, setEstSel, setTrenSel, setVolverA, foco,
             <span style={{ width: 8, height: 8, borderRadius: "50%", background: P.warn, display: "inline-block" }} />
             <span style={{ width: 8, height: 8, borderRadius: "50%", background: P.alert, display: "inline-block" }} /> retraso
           </span>
+          <span style={{ display: "flex", alignItems: "center", gap: 4 }}>
+            <span style={{ fontSize: T.micro, fontWeight: 700, color: P.blanco, background: P.solido, borderRadius: R.menudo, padding: "1px 5px", fontFamily: MONO }}>●2</span>
+            <span style={{ fontSize: T.micro, fontWeight: 700, color: P.blanco, background: P.alert, borderRadius: R.menudo, padding: "1px 5px", fontFamily: MONO }}>●0</span>
+            maquinistas de reserva
+          </span>
         </div>
-        <button onClick={() => setDetalle(!detalle)} style={{ background: P.surface, border: `1px solid ${P.rule}`, borderRadius: R.normal, padding: "6px 10px", fontFamily: "inherit", fontSize: T.aux, fontWeight: 600, color: P.ink, cursor: "pointer", flexShrink: 0 }}>
-          {detalle ? "Ocultar correspondencias" : "Mostrar correspondencias"}
-        </button>
-      </div>
+      )}
 
       <div style={{ ...ST.card, position: "relative", height: H, overflow: "hidden" }}>
         {/* Tramo soterrado del túnel de la Risa, de Chamartín a Atocha. Los
@@ -6079,7 +6859,7 @@ function Mapa({ g, detalle, setDetalle, setEstSel, setTrenSel, setVolverA, foco,
           const a = ESTACIONES.findIndex((e) => e.sot);
           const b = N - 1 - [...ESTACIONES].reverse().findIndex((e) => e.sot);
           const ini = Math.max(0, a - 1); // arranca en la estación anterior: Chamartín
-          const ancho = VIA_B + TRAZO - VIA_A + 16; // el trazado más un margen
+          const ancho = VIA_B + TRAZO - VIA_A + 24; // envuelve también las cápsulas
           return (
             <div
               style={{
@@ -6099,7 +6879,7 @@ function Mapa({ g, detalle, setDetalle, setEstSel, setTrenSel, setVolverA, foco,
         })()}
         {/* las dos vías, del mismo color: el sentido lo marcan los trenes */}
         {[VIA_A, VIA_B].map((x) => (
-          <div key={x} style={{ position: "absolute", left: x, top: ys[0], width: TRAZO, height: ys[N - 1] - ys[0], background: ROJO, borderRadius: R.hilo }} />
+          <div key={x} style={{ position: "absolute", left: x, top: ys[0], width: TRAZO, height: ys[N - 1] - ys[0], background: COLOR.rojo, borderRadius: R.hilo }} />
         ))}
 
         {/* tramos en vía única: la vía cortada se dibuja interrumpida */}
@@ -6141,12 +6921,16 @@ function Mapa({ g, detalle, setDetalle, setEstSel, setTrenSel, setVolverA, foco,
              trazado, que es lo que hacía que el esquema se viera torcido. */
           const cab = !!e.cab || !!e.term;
           const ap = e.tipo === "ap";
-          const w = VIA_B + TRAZO - VIA_A; // de borde a borde de las dos vías
+          /* La cápsula envuelve las dos vías y sobresale a cada lado, con el
+             centro en blanco. El apeadero, en cambio, queda al ras del
+             trazado: la diferencia de ancho es parte de la jerarquía.    */
+          const trazado = VIA_B + TRAZO - VIA_A;
+          const w = ap ? trazado : trazado + 8;
           const hh = ap ? TRAZO : cab ? 20 : 14;
-          const cx = VIA_A + w / 2;
+          const cx = VIA_A + trazado / 2;
           const libres = e.cab ? reservasEn(g, e.cab).length : 0;
           const rest = g.restricciones.find((x) => x.idx === i);
-          const col = rest ? P.warn : ROJO;
+          const col = rest ? P.warn : COLOR.rojo;
           return (
             <div key={e.n}>
               <div
@@ -6197,7 +6981,7 @@ function Mapa({ g, detalle, setDetalle, setEstSel, setTrenSel, setVolverA, foco,
                     </span>
                   )}
                   {e.cab && (
-                    <span style={{ fontSize: T.micro, fontWeight: 700, color: P.blanco, background: libres ? P.ink : P.alert, borderRadius: R.menudo, padding: "1px 5px", fontFamily: MONO, flexShrink: 0 }}>●{libres}</span>
+                    <span style={{ fontSize: T.micro, fontWeight: 700, color: P.blanco, background: libres ? P.solido : P.alert, borderRadius: R.menudo, padding: "1px 5px", fontFamily: MONO, flexShrink: 0 }}>●{libres}</span>
                   )}
                 </div>
                 {detalle && (
@@ -6205,7 +6989,9 @@ function Mapa({ g, detalle, setDetalle, setEstSel, setTrenSel, setVolverA, foco,
                     {e.c.map((l) => <Enlace key={l} txt={l} bg={LIN[l]} />)}
                     {e.metro && <Enlace txt="M" bg={METRO} />}
                     {e.ml && <Enlace txt="ML" bg={ML} />}
-                    {(g.apartado[i] || []).length > 0 && <Enlace txt={`APART ×${g.apartado[i].length}`} bg={P.ink} />}
+                    {/* fondo macizo, no el color del texto: en oscuro quedaba
+                        una pastilla clara con el texto blanco encima */}
+                    {(g.apartado[i] || []).length > 0 && <Enlace txt={`APART ×${g.apartado[i].length}`} bg={P.solido} />}
                   </div>
                 )}
               </button>
@@ -6234,11 +7020,12 @@ function Mapa({ g, detalle, setDetalle, setEstSel, setTrenSel, setVolverA, foco,
                 cursor: "pointer",
                 position: "absolute",
                 top: yDe(t.s.idx) - 11,
-                left: maniobrando ? VIA_A + (VIA_B + TRAZO - VIA_A) / 2 - 6 : (enViaBaja ? VIA_A : VIA_B) + TRAZO / 2 - 6,
+                // centrado en el eje de su vía: la flecha mide 18, no 12
+                left: (maniobrando ? VIA_A + (VIA_B + TRAZO - VIA_A) / 2 : (enViaBaja ? VIA_A : VIA_B) + TRAZO / 2) - 9,
                 width: 18,
                 height: 22,
                 // el material en vacío se distingue en negro
-                background: maniobrando || quieto ? P.muted : t.esVacio ? P.ink : ROJO,
+                background: maniobrando || quieto ? P.muted : t.esVacio ? P.solido : COLOR.rojo,
                 clipPath: maniobrando ? "none" : baja ? CLIP_BAJA : CLIP_SUBE,
                 borderRadius: maniobrando ? 4 : 3,
                 color: P.blanco,
@@ -6268,7 +7055,7 @@ function Mapa({ g, detalle, setDetalle, setEstSel, setTrenSel, setVolverA, foco,
           // la flecha conserva el sentido real; solo cambia la vía que ocupa
           const baja = t.s.dir === "alcala";
           const enViaBaja = contraria ? !baja : baja;
-          const xTren = maniobrando ? VIA_A + (VIA_B + TRAZO - VIA_A) / 2 - 6 : (enViaBaja ? VIA_A : VIA_B) + TRAZO / 2 - 6;
+          const xTren = (maniobrando ? VIA_A + (VIA_B + TRAZO - VIA_A) / 2 : (enViaBaja ? VIA_A : VIA_B) + TRAZO / 2) - 9;
           // sentido Alcalá a la izquierda de la flecha; sentido Pío a la derecha
           const x = enViaBaja ? xTren - 12 : xTren + 19;
           // la punta de la flecha desplaza el número 2,5 px: el círculo se
@@ -6323,10 +7110,9 @@ function PerfilEstacion({ g, i, close, verTren, moverVacio }) {
     <div onClick={close} style={{ position: "fixed", inset: 0, background: "rgba(10,14,17,.45)", animation: "cgo-fondo .18s ease-out", display: "flex", alignItems: "flex-end", justifyContent: "center", zIndex: 65 }}>
       <div
         onClick={(ev) => ev.stopPropagation()}
-        {...arrastre}
         style={{ background: P.surface, width: "100%", maxWidth: 540, maxHeight: "84vh", overflowY: "auto", borderRadius: `${R.grande + 2}px ${R.grande + 2}px 0 0`, padding: 16, boxShadow: SOMBRA.hoja, animation: "cgo-hoja .22s ease-out", ...arrastre.style }}
       >
-        <Asa />
+        <Asa arrastre={arrastre.props} close={close} />
         <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 2 }}>
           <span style={{ ...ST.eyebrow }}>{e.puesto ? "Estación sin servicio comercial" : e.tipo === "est" ? "Estación" : "Apeadero"}</span>
           {e.rot && <span style={{ fontSize: T.micro, fontWeight: 700, color: P.muted, border: `1px solid ${P.rule}`, borderRadius: R.menudo, padding: "0 4px" }}>⇄ posibilidad de rotación</span>}
@@ -6399,7 +7185,7 @@ function PerfilEstacion({ g, i, close, verTren, moverVacio }) {
                         tren={prox.t}
                         txt={`pasa en ${Math.round(prox.eta)} min`}
                         col={prox.eta <= 3 ? P.ok : P.muted}
-                        fondo={ROJO}
+                        fondo={COLOR.rojo}
                         onClick={() => verTren(prox.t.i)}
                       />
                     )}
@@ -6430,11 +7216,11 @@ function PerfilEstacion({ g, i, close, verTren, moverVacio }) {
                       tren={v.pasoTren.t}
                       txt={`pasa en ${Math.round(v.pasoTren.eta)} min`}
                       col={v.pasoTren.eta <= 3 ? P.ok : P.muted}
-                      fondo={ROJO}
+                      fondo={COLOR.rojo}
                       onClick={() => verTren(v.pasoTren.t.i)}
                     />
                   ) : v.tipo === "tren" ? (
-                    <FilaVia g={g} tren={v.tren} txt={`sale en ${v.sale} min`} col={P.ok} fondo={ROJO} onClick={() => verTren(v.tren.i)} />
+                    <FilaVia g={g} tren={v.tren} txt={`sale en ${v.sale} min`} col={P.ok} fondo={COLOR.rojo} onClick={() => verTren(v.tren.i)} />
                   ) : v.tipo === "material" ? (
                     <span style={{ fontSize: T.aux, color: P.warn, fontWeight: 600 }}>material apartado</span>
                   ) : (
@@ -6472,7 +7258,7 @@ function PerfilEstacion({ g, i, close, verTren, moverVacio }) {
                         <span style={{ fontSize: T.aux, fontWeight: 700 }}>{d === "pio" ? "impares" : "pares"}</span>
                         <span style={{ fontSize: T.menor, color: P.muted, display: "block" }}>vía s/n</span>
                       </span>
-                      <FilaVia g={g} tren={prox.t} txt={`pasa en ${Math.round(prox.eta)} min`} col={prox.eta <= 3 ? P.ok : P.muted} fondo={ROJO} onClick={() => verTren(prox.t.i)} />
+                      <FilaVia g={g} tren={prox.t} txt={`pasa en ${Math.round(prox.eta)} min`} col={prox.eta <= 3 ? P.ok : P.muted} fondo={COLOR.rojo} onClick={() => verTren(prox.t.i)} />
                     </div>
                   ) : null;
                 })}
@@ -6515,7 +7301,7 @@ function PerfilEstacion({ g, i, close, verTren, moverVacio }) {
                   </button>
                 </div>
               ))}
-              {apartado.length === 0 && <div style={{ fontSize: T.base, color: P.muted, marginBottom: 8 }}>Sin material apartado.</div>}
+              {apartado.length === 0 && <Vacio icono="⊘" txt="Sin material apartado" pista="Puedes estacionar composiciones aquí desde el perfil de una estación." />}
               <div style={{ borderTop: `1px solid ${P.sunken}`, paddingTop: 8, marginTop: 4, fontSize: T.base }}>
                 <span style={{ color: P.muted }}>{e.apartSeries ? `Solo serie ${e.apartSeries.join("/")} · ` : ""}Vías libres: </span>
                 {libres.length ? (
@@ -6566,11 +7352,13 @@ function PerfilEstacion({ g, i, close, verTren, moverVacio }) {
    Aparece al perder de vista la cabecera. Debe caber en un móvil,
    así que va en dos filas muy compactas.                          */
 
+/* El mapa va en el centro, que es la posición más cómoda para el pulgar y la
+   pantalla que más se consulta durante la partida.                       */
 const TABS = [
   { k: "trenes", l: "Trenes" },
   { k: "personal", l: "Personal" },
-  { k: "taller", l: "Taller" },
   { k: "mapa", l: "Mapa" },
+  { k: "taller", l: "Taller" },
   { k: "libro", l: "Libro" },
 ];
 
@@ -6654,9 +7442,9 @@ function Icono({ tipo, activo, fondo }) {
 // las tres pastillas de la barra comparten medidas para alinearse bien
 const PASTILLA = {
   width: 52,
-  height: 28,
+  height: 34,
   borderRadius: R.normal,
-  fontSize: T.aux,
+  fontSize: T.base,
   fontWeight: 700,
   fontFamily: MONO,
   display: "inline-flex",
@@ -6703,24 +7491,57 @@ function MiniKpi({ k, v, c }) {
 
 /* Barra de mando, anclada abajo: en el móvil el pulgar llega sin cruzar la
    pantalla, y pausa, velocidad y pestañas son lo que más se toca.        */
-function BarraMando({ g, setG, tab, setTab }) {
-  const [abierto, setAbierto] = useState(false);
+/* Barra de datos, anclada arriba: solo información, nada que pulsar. Se mira
+   de reojo mientras se juega, y arriba es donde la vista descansa.       */
+function BarraDatos({ g }) {
   const activos = g.trenes.filter((t) => t.estado !== "suprimido");
   const punt = g.kpi.muestras ? (g.kpi.puntuales / g.kpi.muestras) * 100 : 100;
   const retrasoMedio = activos.length ? activos.reduce((n, t) => n + retrasoEfectivo(t), 0) / activos.length : 0;
+  /* La ocupación media solo cuenta los trenes que llevan viajeros. Los que
+     están invirtiendo en cabecera, rotando en una estación, apartados o
+     circulando en vacío van sin pasaje por definición, y al promediarlos
+     hundían la cifra sin que significara nada.                          */
+  const conViajeros = activos.filter(
+    (t) => !t.rotando && !t.enDesviada && !t.vacio && t.unidades.length && situacion(t, g.reloj).dir !== "maniobra"
+  );
+  const ocupMedia = conViajeros.length
+    ? (conViajeros.reduce((n, t) => n + t.pax.reduce((a, b) => a + b, 0) / (plazasDe(t) || 1), 0) / conViajeros.length) * 100
+    : 0;
+  const enAnden = g.andenes.reduce((n, a) => n + a.alcala + a.pio, 0);
+
   return (
-    <div
-      style={{
-        position: "fixed",
-        bottom: 0,
-        left: 0,
-        right: 0,
-        zIndex: 30,
-        display: "flex",
-        justifyContent: "center",
-        pointerEvents: "none",
-      }}
-    >
+    <div style={{ position: "fixed", top: 0, left: 0, right: 0, zIndex: 30, display: "flex", justifyContent: "center", pointerEvents: "none" }}>
+      <div
+        style={{
+          width: "100%",
+          maxWidth: 540,
+          background: P.surface,
+          borderBottom: `1px solid ${P.rule}`,
+          boxShadow: SOMBRA.card,
+          padding: "calc(6px + env(safe-area-inset-top)) 4px 6px",
+          pointerEvents: "auto",
+        }}
+      >
+        <div style={{ display: "flex", alignItems: "center", gap: 4 }}>
+          <MiniKpi k="PUNT" v={`${punt.toFixed(0)}%`} c={colPuntualidad(punt)} />
+          <MiniKpi k="RETR MED" v={retrasoMedio < 0.05 ? "0′" : `+${retrasoMedio.toFixed(1)}′`} c={colRetrasoMedio(retrasoMedio)} />
+          <MiniKpi k="CIRCUL" v={`${activos.length}/${CIRCULACIONES}`} c={activos.length === CIRCULACIONES ? P.ok : P.warn} />
+          <MiniKpi k="OCUP MED" v={`${ocupMedia.toFixed(0)}%`} c={colOcupacion(ocupMedia)} />
+          <MiniKpi k="EN ANDÉN" v={nf(Math.round(enAnden))} c={nivelCol(enAnden, 1500, 4000)} />
+          <span style={{ ...PASTILLA, width: "auto", padding: "0 8px", fontSize: T.titulo, letterSpacing: -0.7, marginLeft: "auto" }}>{hhmm(g.reloj)}</span>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+/* Barra de mando, anclada abajo: en el móvil el pulgar llega sin cruzar la
+   pantalla, y pausa, velocidad y pestañas son lo que más se toca.        */
+function BarraMando({ g, setG, tab, setTab, setAjustes }) {
+  const [abierto, setAbierto] = useState(false); // desplegable de velocidad
+  const [lineas, setLineas] = useState(false); // desplegable de líneas
+  return (
+    <div style={{ position: "fixed", bottom: 0, left: 0, right: 0, zIndex: 30, display: "flex", justifyContent: "center", pointerEvents: "none" }}>
       <div
         style={{
           width: "100%",
@@ -6733,27 +7554,107 @@ function BarraMando({ g, setG, tab, setTab }) {
           pointerEvents: "auto",
         }}
       >
-        <div style={{ display: "flex", alignItems: "center", gap: 4, padding: "0 5px" }}>
-          <span style={{ ...PASTILLA, background: LIN[LINEA], color: P.blanco, border: "none" }}>{LINEA}</span>
-
-          <button
-            onClick={() => setG((p) => ({ ...p, marcha: !p.marcha }))}
-            style={{ ...PASTILLA, border: `1px solid ${P.rule}`, background: g.marcha ? P.surface : P.ink, color: g.marcha ? P.ink : P.blanco, cursor: "pointer" }}
-          >
-            {g.marcha ? "❚❚" : "▶"}
-          </button>
-
-          <div style={{ position: "relative", flexShrink: 0 }}>
+        {/* los tres controles van juntos y centrados: línea, marcha y velocidad */}
+        {/* La fila de mando pesa más que la de navegación: pausa y velocidad
+            se tocan constantemente durante la partida, y las pestañas solo al
+            cambiar de pantalla.                                          */}
+        {/* Los tres controles siguen centrados en la barra y los ajustes van
+            al extremo derecho. Para que el centrado no se rompa, se reserva a
+            la izquierda el mismo hueco que ocupan los ajustes.          */}
+        <div style={{ display: "flex", alignItems: "center", gap: 8, padding: "0 12px 8px" }}>
+          <div style={{ width: 34, flexShrink: 0 }} />
+          <div style={{ flex: 1, display: "flex", alignItems: "center", justifyContent: "center", gap: 8 }}>
+          {/* Selector de línea. Solo la C-7 está implementada; el resto del
+              núcleo aparece atenuado, igual que en la portada, para que se vea
+              hacia dónde va el juego.                                    */}
+          <div style={{ position: "relative", flex: "0 0 auto" }}>
             <button
-              onClick={() => setAbierto(!abierto)}
-              // ancho fijo: "×0,5" es más largo que "×40" y movía el reloj
-              style={{ ...PASTILLA, border: `1px solid ${abierto ? P.ink : P.rule}`, background: abierto ? P.ink : P.surface, color: abierto ? P.blanco : P.ink, cursor: "pointer", minWidth: 52, textAlign: "center" }}
+              onClick={() => {
+                setLineas(!lineas);
+                setAbierto(false); // solo un desplegable abierto a la vez
+              }}
+              title="Líneas del núcleo"
+              style={{ ...PASTILLA, background: LIN[LINEA], color: P.blanco, border: "none", cursor: "pointer" }}
+            >
+              {LINEA}
+            </button>
+            {lineas && (
+              <div
+                style={{
+                  position: "absolute",
+                  bottom: 40, // por encima de la pastilla, que ahora mide 34
+                  left: "50%",
+                  transform: "translateX(-50%)",
+                  background: P.surface,
+                  border: `1px solid ${P.rule}`,
+                  borderRadius: R.normal,
+                  boxShadow: SOMBRA.elevado,
+                  padding: 4,
+                  zIndex: 40,
+                }}
+              >
+                {LINEAS_NUCLEO.map((l) => {
+                  const activa = l.id === LINEA;
+                  return (
+                    <button
+                      key={l.id}
+                      disabled={!activa}
+                      onClick={() => setLineas(false)}
+                      title={activa ? l.n : `${l.n} · próximamente`}
+                      style={{
+                        ...PASTILLA,
+                        display: "flex",
+                        background: LIN[l.id],
+                        color: P.blanco,
+                        border: "none",
+                        opacity: activa ? 1 : 0.28,
+                        cursor: activa ? "pointer" : "not-allowed",
+                        marginBottom: 4,
+                      }}
+                    >
+                      {l.id}
+                    </button>
+                  );
+                })}
+              </div>
+            )}
+          </div>
+
+          <div style={{ display: "flex", flex: "0 0 auto" }}>
+            <button
+              onClick={() => setG((p) => ({ ...p, marcha: !p.marcha }))}
+              title={g.marcha ? "Pausar" : "Reanudar"}
+              style={{
+                ...PASTILLA,
+                width: "auto",
+                padding: "0 26px",
+                fontSize: T.alto,
+                border: `1px solid ${g.marcha ? P.rule : P.ink}`,
+                background: g.marcha ? P.surface : P.solido,
+                color: g.marcha ? P.ink : P.blanco,
+                cursor: "pointer",
+              }}
+            >
+              {g.marcha ? "❚❚" : "▶"}
+            </button>
+          </div>
+
+          <div style={{ position: "relative", flex: "0 0 auto" }}>
+            <button
+              onClick={() => {
+                setAbierto(!abierto);
+                setLineas(false);
+              }}
+              // ancho fijo: "×0,5" es más largo que "×40" y descolocaba la fila
+              // mismo ancho que la pastilla de la línea: el ancho mínimo la
+              // dejaba crecer con el texto y quedaban desiguales
+              style={{ ...PASTILLA, border: `1px solid ${abierto ? P.ink : P.rule}`, background: abierto ? P.solido : P.surface, color: abierto ? P.blanco : P.ink, cursor: "pointer", textAlign: "center" }}
             >
               ×{velTxt(g.vel)} ▾
             </button>
             {/* el desplegable se abre hacia arriba: abajo se saldría de la pantalla */}
             {abierto && (
-              <div style={{ position: "absolute", bottom: 28, left: 0, background: P.surface, border: `1px solid ${P.rule}`, borderRadius: R.normal, boxShadow: SOMBRA.elevado, padding: 4, zIndex: 40 }}>
+              <div style={{ position: "absolute", bottom: 40, left: "50%", transform: "translateX(-50%)", background: P.surface, border: `1px solid ${P.rule}`, borderRadius: R.normal, boxShadow: SOMBRA.elevado, padding: 4, zIndex: 40 }}>
                 {VELOCIDADES.map((v) => (
                   <button
                     key={v}
@@ -6769,81 +7670,79 @@ function BarraMando({ g, setG, tab, setTab }) {
               </div>
             )}
           </div>
+          </div>
 
-          <MiniKpi k="PUNT" v={`${punt.toFixed(0)}%`} c={colPuntualidad(punt)} />
-          <MiniKpi k="RETR" v={retrasoMedio < 0.05 ? "0′" : `+${retrasoMedio.toFixed(1)}′`} c={colRetrasoMedio(retrasoMedio)} />
-          <MiniKpi k="CIRCUL" v={`${activos.length}/${CIRCULACIONES}`} c={activos.length === CIRCULACIONES ? P.ok : P.warn} />
-
-          <span style={{ ...PASTILLA, width: "auto", padding: "0 8px", fontSize: T.titulo, letterSpacing: -0.7 }}>{hhmm(g.reloj)}</span>
+          <button
+            onClick={() => setAjustes(true)}
+            title="Ajustes"
+            style={{
+              width: 34,
+              height: 34,
+              flexShrink: 0,
+              border: `1px solid ${P.rule}`,
+              background: P.surface,
+              color: P.muted,
+              borderRadius: R.normal,
+              fontFamily: "inherit",
+              fontSize: T.alto,
+              fontWeight: 700,
+              lineHeight: 1,
+              cursor: "pointer",
+              display: "flex",
+              alignItems: "center",
+              justifyContent: "center",
+            }}
+          >
+            ⋯
+          </button>
         </div>
 
-        <div style={{ display: "flex", gap: 4, marginTop: 4, padding: "0 22px" }}>
+        {/* mismo margen lateral que la fila de mando: con 22 aquí y 12 arriba,
+            las dos filas no se alineaban entre sí */}
+        <div style={{ display: "flex", gap: 4, padding: "0 12px" }}>
           {TABS.map((x) => {
             const on = tab === x.k;
             return (
+              /* Deliberadamente mínimo. Llegó a tener clase CSS, cuatro
+                 manejadores de puntero, manipulación directa del DOM y
+                 recorte de texto; cada añadido era un sospechoso más del
+                 retardo al cambiar de pantalla. Un botón y su onClick. */
               <button
                 key={x.k}
-                // pulsar la pestaña en la que ya estás lleva al principio
-                onClick={() => (on ? window.scrollTo({ top: 0, behavior: "smooth" }) : setTab(x.k))}
-                title={on ? "Ir al principio" : x.l}
+                className="cgo-tab"
+                // sin esto, iOS no aplica el estado :active de forma fiable
+                onTouchStart={() => {}}
+                /* Se cede un fotograma antes de cambiar: el navegador pinta
+                   la pestaña hundida y solo después monta la pantalla. Si ya
+                   estás en ese menú, el toque lleva al principio.        */
+                onClick={() =>
+                  requestAnimationFrame(() => (on ? window.scrollTo({ top: 0, behavior: "smooth" }) : setTab(x.k)))
+                }
                 style={{
                   flex: 1,
                   border: "none",
-                  // el rojo abarca icono y palabra: se ve mejor qué menú está activo
                   background: on ? LIN[LINEA] : "transparent",
                   borderRadius: "7px 7px 0 0",
                   color: on ? P.blanco : P.muted,
-                  padding: "4px 0 0",
+                  height: 34,
+                  padding: 0,
                   fontFamily: "inherit",
                   fontSize: T.menor,
                   fontWeight: on ? 700 : 500,
+                  // fundido corto del rojo: alcanza solo a cinco elementos
+                  transition: "background-color .18s ease-out, color .18s ease-out",
                   cursor: "pointer",
                   display: "flex",
                   flexDirection: "column",
                   alignItems: "center",
-                  position: "relative",
+                  justifyContent: "center",
                 }}
               >
-                {/* El icono se sumerge bajo la franja del rótulo y vuelve a
-                    salir. La ventana recorta lo que sobresale y la franja,
-                    opaca y del mismo rojo, lo oculta al llegar abajo.    */}
-                <span
-                  style={{
-                    width: 14,
-                    height: 15,
-                    // recorta el icono mientras baja; el rótulo opaco lo tapa
-                    overflow: "hidden",
-                    display: "flex",
-                    alignItems: "flex-start",
-                    justifyContent: "center",
-                  }}
-                >
-                  <span
-                    // se anima solo al activarse, y termina de nuevo arriba
-                    key={on ? "on" : "off"}
-                    style={{
-                      display: "flex",
-                      transform: "translateY(1px)",
-                      animation: on ? "cgo-inmersion .34s cubic-bezier(.4,0,.2,1)" : "none",
-                    }}
-                  >
+                <span style={{ display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", gap: 3 }}>
+                  <span style={{ width: 13, height: 13, display: "flex", alignItems: "center", justifyContent: "center" }}>
                     <Icono tipo={x.k} activo={on} fondo={on ? LIN[LINEA] : P.surface} />
                   </span>
-                </span>
-
-                <span
-                  style={{
-                    position: "relative",
-                    zIndex: 1,
-                    textAlign: "center",
-                    width: "100%",
-                    // franja opaca del mismo rojo: es lo que oculta el icono
-                    background: on ? LIN[LINEA] : "transparent",
-                    padding: "3px 0 6px",
-                    transition: "background-color .2s ease, color .2s ease",
-                  }}
-                >
-                  {x.l}
+                  <span style={{ lineHeight: "12px" }}>{x.l}</span>
                 </span>
               </button>
             );
@@ -7205,7 +8104,7 @@ function SelectorVacio({ g, setG, idx, via, close }) {
   const talleres = talleresPara(g, lote.unidades[0], Math.floor(g.reloj / 480)).filter((o) => o.libres > 0);
 
   const pill = (on) => ({
-    background: on ? P.ink : P.surface,
+    background: on ? P.solido : P.surface,
     color: on ? P.blanco : P.ink,
     border: `1px solid ${on ? P.ink : P.rule}`,
     borderRadius: R.pastilla,
@@ -7246,7 +8145,7 @@ function SelectorVacio({ g, setG, idx, via, close }) {
         </div>
 
         <div style={{ ...ST.eyebrow, marginBottom: 8 }}>Maquinista de reserva</div>
-        {reservas.length === 0 && <div style={{ fontSize: T.base, color: P.alert, marginBottom: 12 }}>No hay ningún maquinista de reserva libre.</div>}
+        {reservas.length === 0 && <Vacio icono="!" txt="Sin reservas disponibles" pista="Todas las reservas están ocupadas o han agotado su jornada." />}
         <div style={{ display: "flex", flexWrap: "wrap", marginBottom: 12 }}>
           {reservas.map((m) => {
             const iCab = ESTACIONES.findIndex((e) => e.cab === m.lugar);
@@ -7280,7 +8179,7 @@ function SelectorVacio({ g, setG, idx, via, close }) {
         <button
           onClick={lanzar}
           disabled={!maq || !dest}
-          style={{ width: "100%", background: maq && dest ? P.ink : P.sunken, color: maq && dest ? P.blanco : P.muted, border: "none", borderRadius: R.normal, padding: 12, fontFamily: "inherit", fontWeight: 700, fontSize: T.alto, cursor: maq && dest ? "pointer" : "not-allowed", marginTop: 12 }}
+          style={{ width: "100%", background: maq && dest ? P.solido : P.sunken, color: maq && dest ? P.blanco : P.muted, border: "none", borderRadius: R.normal, padding: 12, fontFamily: "inherit", fontWeight: 700, fontSize: T.alto, cursor: maq && dest ? "pointer" : "not-allowed", marginTop: 12 }}
         >
           Ordenar la marcha en vacío
         </button>
@@ -7332,7 +8231,7 @@ function SelectorReposicion({ g, setG, i, close }) {
             </div>
 
             {!p2.reservas && <div style={{ fontSize: T.aux, color: P.alert, marginBottom: 4 }}>Sin maquinista de reserva en esta cabecera.</div>}
-            {p2.comps.length === 0 && <div style={{ fontSize: T.aux, color: P.muted }}>No hay material disponible aquí.</div>}
+            {p2.comps.length === 0 && <Vacio icono="⊘" txt="Sin material disponible" pista="No hay composiciones apartadas en esta estación." />}
 
             {p2.comps.map((c) => (
               <button
@@ -7479,7 +8378,7 @@ function SelectorTaller({ g, setG, id, close }) {
             </Bloque>
             <button
               onClick={sacar}
-              style={{ width: "100%", background: enTaller.restan > 0 ? P.surface : P.ink, color: enTaller.restan > 0 ? P.ink : P.blanco, border: `1px solid ${enTaller.restan > 0 ? P.warn : P.ink}`, borderRadius: R.normal, padding: 12, fontFamily: "inherit", fontWeight: 600, fontSize: T.alto, cursor: "pointer", marginBottom: 8 }}
+              style={{ width: "100%", background: enTaller.restan > 0 ? P.surface : P.solido, color: enTaller.restan > 0 ? P.ink : P.blanco, border: `1px solid ${enTaller.restan > 0 ? P.warn : P.ink}`, borderRadius: R.normal, padding: 12, fontFamily: "inherit", fontWeight: 600, fontSize: T.alto, cursor: "pointer", marginBottom: 8 }}
             >
               {enTaller.restan > 0 ? "Sacar antes de tiempo · solo cuenta lo hecho" : "Sacar de taller"}
             </button>
@@ -7646,7 +8545,7 @@ function Taller({ g, setG, verUnidad, abierto, setAbierto, setGestion }) {
                   height: 16,
                   borderRadius: R.menudo,
                   border: `1.5px solid ${marcada ? P.ink : P.rule}`,
-                  background: marcada ? P.ink : P.surface,
+                  background: marcada ? P.solido : P.surface,
                   color: P.blanco,
                   fontSize: T.aux,
                   display: "flex",
@@ -7679,7 +8578,7 @@ function Taller({ g, setG, verUnidad, abierto, setAbierto, setGestion }) {
                       key={tipo}
                       onClick={() => marcar(p.u.id, { tipo })}
                       style={{
-                        background: marcada.tipo === tipo ? P.ink : P.surface,
+                        background: marcada.tipo === tipo ? P.solido : P.surface,
                         color: marcada.tipo === tipo ? P.blanco : P.ink,
                         border: `1px solid ${marcada.tipo === tipo ? P.ink : P.rule}`,
                         borderRadius: R.pastilla,
@@ -7741,7 +8640,7 @@ function Taller({ g, setG, verUnidad, abierto, setAbierto, setGestion }) {
           <button
             onClick={confirmar}
             disabled={Object.values(sel).some((v) => !v.dep)}
-            style={{ width: "100%", background: P.ink, color: P.blanco, border: "none", borderRadius: R.normal, padding: 12, fontFamily: "inherit", fontSize: T.alto, fontWeight: 700, cursor: "pointer" }}
+            style={{ width: "100%", background: P.solido, color: P.blanco, border: "none", borderRadius: R.normal, padding: 12, fontFamily: "inherit", fontSize: T.alto, fontWeight: 700, cursor: "pointer" }}
           >
             Enviar {nSel} unidad{nSel === 1 ? "" : "es"} · {nf(coste)} €
           </button>
@@ -7765,7 +8664,7 @@ function Taller({ g, setG, verUnidad, abierto, setAbierto, setGestion }) {
               <Enlace txt={dep} bg={(DEPOSITOS[dep] || {}).color || P.muted} />
               <span style={{ fontSize: T.aux, color: P.muted, flex: 1 }}>{t.series.join(" y ")}</span>
               {dentro.length > 0 && (
-                <span style={{ fontSize: T.aux, fontWeight: 700, color: ROJO }}>
+                <span style={{ fontSize: T.aux, fontWeight: 700, color: COLOR.rojo }}>
                   {dentro.length} dentro {desplegado ? "▲" : "▼"}
                 </span>
               )}
@@ -7779,7 +8678,7 @@ function Taller({ g, setG, verUnidad, abierto, setAbierto, setGestion }) {
                   key={k}
                   style={{
                     flex: 1,
-                    background: k < ajenas ? P.muted : k < ajenas + propias ? ROJO : k < ajenas + propias + reservadas ? P.warn : P.ok,
+                    background: k < ajenas ? P.muted : k < ajenas + propias ? COLOR.rojo : k < ajenas + propias + reservadas ? P.warn : P.ok,
                     borderRight: k < t.plazas - 1 ? "1px solid #fff" : "none",
                   }}
                 />
@@ -7940,10 +8839,9 @@ function PerfilUnidad({ g, id, close, volverA, volver, verTaller, gestionar }) {
     <div onClick={close} style={{ position: "fixed", inset: 0, background: "rgba(10,14,17,.45)", animation: "cgo-fondo .18s ease-out", display: "flex", alignItems: "flex-end", justifyContent: "center", zIndex: 68 }}>
       <div
         onClick={(ev) => ev.stopPropagation()}
-        {...arrastre}
         style={{ background: P.surface, width: "100%", maxWidth: 540, maxHeight: "88vh", overflowY: "auto", borderRadius: `${R.grande + 2}px ${R.grande + 2}px 0 0`, padding: 16, boxShadow: SOMBRA.hoja, animation: "cgo-hoja .22s ease-out", ...arrastre.style }}
       >
-        <Asa />
+        <Asa arrastre={arrastre.props} close={close} />
         {volverA && (
           <button onClick={volver} style={{ all: "unset", cursor: "pointer", display: "inline-flex", alignItems: "center", gap: 4, fontSize: T.base, fontWeight: 600, color: P.muted, marginBottom: 8 }}>
             ‹ Volver a {volverA.nombre}
@@ -8011,7 +8909,7 @@ function PerfilUnidad({ g, id, close, volverA, volver, verTaller, gestionar }) {
         </Bloque>
 
         <Bloque titulo="Trenes que hace hoy">
-          {marchas.length === 0 && <div style={{ fontSize: T.base, color: P.muted, padding: "6px 0" }}>Sin servicio asignado en este turno.</div>}
+          {marchas.length === 0 && <Vacio icono="—" txt="Sin servicio en este turno" pista="Esta unidad no tiene circulación asignada." />}
           {marchas.map((x, k) => {
             const enCurso = enCursoU === x;
             const pasada = x.estado === "hecha";
@@ -8022,7 +8920,7 @@ function PerfilUnidad({ g, id, close, volverA, volver, verTaller, gestionar }) {
             const tarde = pasada && x.finReal !== undefined && x.finReal - x.fin > 2;
             return (
               <div key={k} style={{ display: "flex", alignItems: "center", gap: 8, padding: "7px 10px", margin: "0 -12px", borderRadius: R.normal, background: fondoFila(k), opacity: pasada ? 0.45 : 1 }}>
-                <span style={{ fontSize: T.aux, fontWeight: 700, fontFamily: MONO, color: P.blanco, background: enCurso ? ROJO : pasada ? P.ink : P.muted, borderRadius: R.menudo, padding: "1px 6px", flexShrink: 0 }}>
+                <span style={{ fontSize: T.aux, fontWeight: 700, fontFamily: MONO, color: P.blanco, background: enCurso ? COLOR.rojo : pasada ? P.solido : P.muted, borderRadius: R.menudo, padding: "1px 6px", flexShrink: 0 }}>
                   {x.num}
                 </span>
                 <span style={{ fontSize: T.base, flex: 1, minWidth: 0, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis", lineHeight: "17px" }}>
@@ -8089,10 +8987,9 @@ function PerfilTren({ g, i, close, setRotarDe, setApartarDe, setSuprimirDe, setR
     <div onClick={close} style={{ position: "fixed", inset: 0, background: "rgba(10,14,17,.45)", animation: "cgo-fondo .18s ease-out", display: "flex", alignItems: "flex-end", justifyContent: "center", zIndex: 66 }}>
       <div
         onClick={(ev) => ev.stopPropagation()}
-        {...arrastre}
         style={{ background: P.surface, width: "100%", maxWidth: 540, maxHeight: "88vh", overflowY: "auto", borderRadius: `${R.grande + 2}px ${R.grande + 2}px 0 0`, padding: 16, boxShadow: SOMBRA.hoja, animation: "cgo-hoja .22s ease-out", ...arrastre.style }}
       >
-        <Asa />
+        <Asa arrastre={arrastre.props} close={close} />
         {volverA && (
           <button
             onClick={volver}
@@ -8109,7 +9006,7 @@ function PerfilTren({ g, i, close, setRotarDe, setApartarDe, setSuprimirDe, setR
               fontWeight: 700,
               color: P.blanco,
               // el material en vacío no presta servicio en ninguna línea
-              background: t.esVacio ? P.ink : LIN[LINEA],
+              background: t.esVacio ? P.solido : LIN[LINEA],
               borderRadius: R.menudo,
               // mismo tamaño exacto que la pastilla de la línea, aunque "MV"
               // ocupe menos: si no, el número de tren bailaba de sitio
@@ -8131,7 +9028,7 @@ function PerfilTren({ g, i, close, setRotarDe, setApartarDe, setSuprimirDe, setR
 
         <Bloque titulo="Composición">
           <div style={{ padding: "6px 0" }}>
-            {t.unidades.length === 0 && <div style={{ fontSize: T.base, color: P.muted }}>Sin material.</div>}
+            {t.unidades.length === 0 && <Vacio icono="⊘" txt="Circulación sin material" pista="Asígnale una composición para devolverla al servicio." />}
             {t.unidades.map((u, ku) => (
               <div key={u.id} onClick={() => verUnidad && verUnidad(u.id)} style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", padding: "6px 10px", margin: "0 -12px", borderRadius: R.normal, background: fondoFila(ku), fontSize: T.base, cursor: verUnidad ? "pointer" : "default" }}>
                 <span style={{ fontFamily: MONO, fontWeight: 700, borderBottom: verUnidad ? `1px dotted ${P.rule}` : "none" }}>{u.id}</span>
@@ -8180,7 +9077,7 @@ function PerfilTren({ g, i, close, setRotarDe, setApartarDe, setSuprimirDe, setR
         <Bloque titulo="Histórico de retraso">
           <div style={{ padding: "4px 0" }}>
             {t.hist.length === 0 && t.acum.paradas < 0.5 && (t.acum.bloqueo || 0) < 0.5 && Math.abs(t.acum.maquinista) < 0.5 && (
-              <div style={{ fontSize: T.base, color: P.muted }}>Sin incidencias. Marcha conforme al horario.</div>
+              <Vacio icono="✓" txt="Sin incidencias" pista="La circulación marcha conforme al horario." />
             )}
             {t.hist.map((h, k) => (
               <div key={k} style={{ display: "flex", gap: 8, alignItems: "baseline", padding: "5px 10px", margin: "0 -12px", borderRadius: R.normal, background: fondoFila(k), fontSize: T.base }}>
@@ -8247,7 +9144,7 @@ function PerfilTren({ g, i, close, setRotarDe, setApartarDe, setSuprimirDe, setR
                   fontWeight: enCurso ? 600 : 400,
                 }}
               >
-                <span style={{ fontSize: T.aux, fontWeight: 700, fontFamily: MONO, color: P.blanco, background: enCurso ? ROJO : pasada ? P.ink : P.muted, borderRadius: R.menudo, padding: "1px 6px", flexShrink: 0 }}>
+                <span style={{ fontSize: T.aux, fontWeight: 700, fontFamily: MONO, color: P.blanco, background: enCurso ? COLOR.rojo : pasada ? P.solido : P.muted, borderRadius: R.menudo, padding: "1px 6px", flexShrink: 0 }}>
                   {x.num}
                 </span>
                 <span style={{ fontSize: T.base, flex: 1, minWidth: 0, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis", lineHeight: "17px" }}>
@@ -8352,6 +9249,7 @@ function Libro({ g }) {
         </div>
       ))}
       </div>
+
     </div>
   );
 }
@@ -8433,9 +9331,20 @@ const INFO_ATRIB = {
   },
 };
 
-function Atributos({ m, onInfo }) {
+function Atributos({ m, onInfo, plegable, saliendo }) {
   return (
-    <div style={{ display: "flex", gap: 8, marginTop: 8 }}>
+    <div
+      style={{
+        display: "flex",
+        gap: 8,
+        marginTop: 8,
+        /* En la ficha de tren el bloque se pliega, así que se anima también su
+           altura y la tarjeta acompaña al contenido. En Personal está fijo y
+           no necesita nada.                                              */
+        overflow: plegable ? "hidden" : "visible",
+        animation: !plegable ? "none" : saliendo ? "cgo-cierra .26s ease-in forwards" : "cgo-abre .26s ease-out",
+      }}
+    >
       {["pun", "pro", "con"].map((k) => {
         const v = m[k];
         return (
@@ -8514,7 +9423,8 @@ function useCerrarArrastrando(close) {
   const est = useRef({ activo: false, y0: 0, dy: 0 });
 
   const onPointerDown = (e) => {
-    if (e.currentTarget.scrollTop > 0) return; // manda el desplazamiento
+    // el asa captura el puntero: el gesto es suyo hasta que se suelte
+    if (e.currentTarget.setPointerCapture) e.currentTarget.setPointerCapture(e.pointerId);
     est.current = { activo: true, y0: e.clientY, dy: 0 };
   };
 
@@ -8535,24 +9445,154 @@ function useCerrarArrastrando(close) {
   };
 
   return {
-    onPointerDown,
-    onPointerMove,
-    onPointerUp: soltar,
-    onPointerCancel: soltar,
-    onPointerLeave: soltar,
+    // manejadores para el asa
+    props: {
+      onPointerDown,
+      onPointerMove,
+      onPointerUp: soltar,
+      onPointerCancel: soltar,
+    },
+    // desplazamiento para el panel
     style: {
       transform: dy ? `translateY(${dy}px)` : "none",
-      transition: est.current.activo ? "none" : "transform .18s ease-out",
-      touchAction: "pan-y",
+      transition: est.current.activo ? "none" : "transform .2s ease-out",
     },
   };
 }
 
-// asa superior: indica que la hoja se puede empujar hacia abajo
-function Asa() {
+/* Asa de la hoja. Es la única zona que arrastra: si el gesto se escucha en
+   todo el panel choca con la recarga del navegador y con el desplazamiento
+   del contenido. Al lado va un cierre explícito, que es lo que la mayoría
+   va a usar.                                                             */
+function Asa({ arrastre, close }) {
   return (
-    <div style={{ display: "flex", justifyContent: "center", margin: "-4px 0 10px" }}>
-      <div style={{ width: 38, height: 4, borderRadius: R.hilo, background: P.rule }} />
+    <div style={{ display: "flex", alignItems: "center", margin: "-4px 0 8px", position: "relative" }}>
+      <div
+        {...(arrastre || {})}
+        style={{
+          flex: 1,
+          display: "flex",
+          justifyContent: "center",
+          padding: "8px 0",
+          cursor: "grab",
+          touchAction: "none", // el gesto vertical es de la hoja, no del navegador
+        }}
+      >
+        <div style={{ width: 38, height: 4, borderRadius: R.hilo, background: P.rule }} />
+      </div>
+      {close && (
+        <button
+          onClick={close}
+          title="Cerrar"
+          style={{
+            position: "absolute",
+            right: 12,
+            border: "none",
+            background: "transparent",
+            color: P.muted,
+            fontSize: T.titulo,
+            lineHeight: 1,
+            padding: "4px 8px",
+            cursor: "pointer",
+            fontFamily: "inherit",
+          }}
+        >
+          ×
+        </button>
+      )}
+    </div>
+  );
+}
+
+/* Estado vacío. Repartidos por el juego había una docena de huecos resueltos
+   con una frase en gris, que parecían un error del programa en vez de una
+   situación normal. Este componente les da un tratamiento común: una marca,
+   la frase y, si procede, qué hacer al respecto.                         */
+/* Ficha de la línea: lo que el jugador necesita saber de la C-7 sin tener que
+   deducirlo recorriendo el mapa. Todo se calcula de los propios datos, así que
+   no puede quedar desfasada al tocar la infraestructura.                 */
+function InfoLinea() {
+  const cabeceras = ESTACIONES.filter((e) => e.cab || e.term);
+  const apeaderos = ESTACIONES.filter((e) => e.tipo === "ap" && !e.puesto);
+  const puestos = ESTACIONES.filter((e) => e.puesto);
+  const soterradas = ESTACIONES.filter((e) => e.sot);
+  const conServicio = N - puestos.length;
+  const fila = { display: "flex", gap: 8, fontSize: T.aux, lineHeight: 1.5, marginBottom: 6 };
+  const clave = { color: P.muted, flex: "0 0 104px" };
+
+  return (
+    <div style={{ ...ST.card, padding: 12, marginBottom: 8, animation: "cgo-entra .2s ease-out" }}>
+      <div style={{ ...ST.eyebrow, marginBottom: 8 }}>
+        {LINEA} · {ESTACIONES[0].n} – {ESTACIONES[N - 1].n}
+      </div>
+
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: 8, marginBottom: 12 }}>
+        <Kpi k="Longitud" v={`${LONGITUD} km`} c={P.ink} small />
+        <Kpi k="Recorrido" v={`${RECORRIDO} min`} c={P.ink} small />
+        <Kpi k="Intervalo" v={`${INTERVALO} min`} c={P.ink} small />
+      </div>
+
+      <div style={fila}>
+        <span style={clave}>Paradas</span>
+        <span>
+          {conServicio} con servicio comercial de {N} puntos de la línea
+        </span>
+      </div>
+      <div style={fila}>
+        <span style={clave}>Cabeceras</span>
+        <span>{cabeceras.map((e) => e.n).join(" · ")}</span>
+      </div>
+      <div style={fila}>
+        <span style={clave}>Apeaderos</span>
+        <span>
+          {apeaderos.length}: {apeaderos.map((e) => e.corto).join(", ")}
+        </span>
+      </div>
+      <div style={fila}>
+        <span style={clave}>Sin servicio</span>
+        <span>{puestos.map((e) => e.n).join(" · ")}, puestos de circulación donde el tren no admite viajeros</span>
+      </div>
+      <div style={fila}>
+        <span style={clave}>Túnel</span>
+        <span>{soterradas.map((e) => e.corto).join(" · ")}, en el túnel de la Risa</span>
+      </div>
+      <div style={fila}>
+        <span style={clave}>Circulaciones</span>
+        <span>{CIRCULACIONES} trenes simultáneos, uno cada {INTERVALO} minutos por sentido</span>
+      </div>
+      <div style={fila}>
+        <span style={clave}>Rotaciones</span>
+        <span>
+          Rotación de {INV_ALCALA} minutos en {ALCALA} y de {INV_PIO} minutos en {PIO}
+        </span>
+      </div>
+
+    </div>
+  );
+}
+
+function Vacio({ txt, pista, icono = "—" }) {
+  return (
+    <div style={{ padding: "20px 12px", textAlign: "center" }}>
+      <div
+        style={{
+          width: 34,
+          height: 34,
+          margin: "0 auto 8px",
+          borderRadius: R.pastilla,
+          border: `2px dashed ${P.rule}`,
+          color: P.muted,
+          fontSize: T.alto,
+          fontWeight: 700,
+          display: "flex",
+          alignItems: "center",
+          justifyContent: "center",
+        }}
+      >
+        {icono}
+      </div>
+      <div style={{ fontSize: T.base, fontWeight: 600, color: P.ink }}>{txt}</div>
+      {pista && <div style={{ fontSize: T.aux, color: P.muted, marginTop: 4, lineHeight: 1.45 }}>{pista}</div>}
     </div>
   );
 }
@@ -8568,7 +9608,7 @@ function Etiqueta({ txt, c }) {
         borderRadius: R.menudo,
         padding: "1px 6px",
         whiteSpace: "nowrap",
-        animation: "cgo-entra .18s ease-out",
+        animation: "cgo-entra .2s ease-out",
       }}
     >
       {txt}
@@ -8611,31 +9651,69 @@ function Fonts() {
          barra, el área visible se ensanchaba y el contenido centrado saltaba
          unos píxeles a un lado. */
       html { scrollbar-gutter: stable; }
+      /* Se desactiva el gesto de recargar tirando hacia abajo: en un juego a
+         pantalla completa estorba y chocaba con el arrastre de las hojas. No
+         todos los navegadores lo respetan, así que además la partida se
+         guarda sola y una recarga no cuesta el turno.                     */
+      html, body { overscroll-behavior: none; overscroll-behavior-y: none; }
       body { margin: 0; }
 
       /* Movimiento. Los cambios de estado aparecían de golpe: una etiqueta que
          surge, un color que salta, una incidencia que irrumpe. Un cuarto de
          segundo basta para que el ojo siga el cambio sin que estorbe.      */
-      button { transition: background-color .16s ease, border-color .16s ease, color .16s ease, opacity .16s ease; }
-      button:active:not(:disabled) { transform: scale(.985); }
+      /* Los botones responden al tacto. La regla alcanza a todos, pero con el
+         recorte de lo que queda fuera de pantalla solo hay una quincena
+         dibujada a la vez, así que ya no pesa.                          */
+      button:not(:disabled) {
+        transition: background-color .18s ease-out, border-color .18s ease-out, color .18s ease-out, transform .22s cubic-bezier(.16, .84, .28, 1), opacity .22s ease-out;
+      }
+      button:active:not(:disabled) {
+        transform: scale(.97);
+        opacity: .72;
+        transition: none;
+      }
+      /* La pestaña se hunde al pulsarla, como una tecla. Solo alcanza a cinco
+         elementos, así que no tiene coste apreciable.                     */
+      .cgo-tab { touch-action: manipulation; }
+      /* El hundido entra de golpe y sale despacio. La ida sin transición se
+         pinta antes de que el navegador empiece a montar la pantalla nueva,
+         que es lo que se comía la animación en las pantallas pesadas; la
+         vuelta, larga y con curva suave, es la que da la sensación de que
+         el botón cede y se recupera en vez de saltar.                   */
+      .cgo-tab > span {
+        transition: transform .34s cubic-bezier(.16, .84, .28, 1), opacity .34s ease-out;
+      }
+      .cgo-tab:active > span {
+        transform: translateY(1.5px) scale(.98);
+        opacity: .94;
+        transition: none;
+      }
 
-      @keyframes cgo-entra { from { opacity: 0; transform: translateY(-3px); } to { opacity: 1; transform: none; } }
       @keyframes cgo-hoja { from { opacity: 0; transform: translateY(14px); } to { opacity: 1; transform: none; } }
+      /* las etiquetas de estado aparecen con un matiz, no de golpe */
+      @keyframes cgo-entra { from { opacity: 0; transform: translateY(-2px); } to { opacity: 1; transform: none; } }
+      @keyframes cgo-sale { from { opacity: 1; transform: none; } to { opacity: 0; transform: translateY(-2px); } }
+
+      /* Despliegue con altura: al desaparecer el bloque, la ficha recuperaba
+         su tamaño de golpe. Animando también el alto, la tarjeta se cierra
+         acompañando al contenido en vez de dar un salto.                 */
+      @keyframes cgo-abre {
+        from { opacity: 0; max-height: 0; margin-top: 0; }
+        to { opacity: 1; max-height: 48px; margin-top: 8px; }
+      }
+      @keyframes cgo-cierra {
+        from { opacity: 1; max-height: 48px; margin-top: 8px; }
+        to { opacity: 0; max-height: 0; margin-top: 0; }
+      }
       @keyframes cgo-fondo { from { opacity: 0; } to { opacity: 1; } }
 
-      /* El icono de la pestaña se sumerge bajo el rótulo y vuelve a emerger */
-      @keyframes cgo-inmersion {
-        0%   { transform: translateY(1px); }
-        45%  { transform: translateY(16px); }
-        62%  { transform: translateY(16px); }
-        100% { transform: translateY(1px); }
-      }
+
 
       /* quien prefiera no ver animaciones, no las ve */
       @media (prefers-reduced-motion: reduce) {
         *, *::before, *::after { animation-duration: .01ms !important; transition-duration: .01ms !important; }
       }
-      button:focus-visible { outline: 2px solid ${ROJO}; outline-offset: 2px; }
+      button:focus-visible { outline: 2px solid ${COLOR.rojo}; outline-offset: 2px; }
     `}</style>
   );
 }
