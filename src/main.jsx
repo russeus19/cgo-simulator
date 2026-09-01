@@ -1,5 +1,6 @@
 import React from "react";
 import { createRoot } from "react-dom/client";
+import { Analytics } from "@vercel/analytics/react";
 import CGOC7 from "./App.jsx";
 
 /* Red de seguridad. Cuando algo falla durante el dibujado, React desmonta todo
@@ -81,5 +82,6 @@ class Salvavidas extends React.Component {
 createRoot(document.getElementById("root")).render(
   <Salvavidas>
     <CGOC7 />
+    <Analytics />
   </Salvavidas>
 );
