@@ -21,6 +21,7 @@ const CLARO = {
   rule: "#D5DAD9",
   sunken: "#F3F5F4",
   solido: "#11161A", // fondo macizo con texto blanco encima
+  info: "#0065B3", // incidencia leve: informa, no alarma
   ok: "#0E7A50",
   warn: "#D98200",
   alert: "#C8102E",
@@ -38,6 +39,7 @@ const OSCURO = {
      el texto blanco encima. Este tono se despega de la tarjeta (3,3:1) y
      mantiene el blanco legible encima (5,2:1).                         */
   solido: "#5B6E85",
+  info: "#4C9BE0",
   ok: "#2FA26E",
   warn: "#E8A33D",
   alert: "#F05A6B",
@@ -99,7 +101,7 @@ const MONO = "'Archivo', system-ui, sans-serif";
 
 const LIN = { "C-7": "#D7282F", "C-1": "#5BB3E4", "C-9": "#0E7A50", "C-2": "#00A24B", "C-3": "#7B2E8E", "C-4": "#004B93", "C-5": "#F2A104", "C-8": "#8A8F94", "C-10": "#00A192" };
 const METRO = "#0065B3";
-const LINEA = "C-7"; // línea de las circulaciones de esta partida
+let LINEA = "C-7"; // línea que el motor está procesando ahora mismo
 
 // núcleo de Cercanías Madrid. Solo la C-7 está implementada por ahora.
 const LINEAS_NUCLEO = [
@@ -122,7 +124,12 @@ const TURNOS = [
 const SERIE_COLOR = { 446: "#6B7780", 450: "#7B2E8E", 465: "#004B93" };
 const ML = "#46708C";
 
-const ESTACIONES = [
+/* ── catálogo de líneas ─────────────────────────────────────────
+   Cada línea declara su infraestructura y sus tiempos. El motor trabaja con
+   UNA línea a la vez: fijarLinea() cambia las constantes globales, igual que
+   el tema cambia la paleta. Así conviven varias sin reescribir las quinientas
+   referencias que hay repartidas por el juego.                        */
+const EST_C7 = [
   { n: "Príncipe Pío", corto: "P. Pío", t: 0, esc: 4, rotVias: ["vía 3", "vía 4"], apartVias: ["vía 30"], apartSeries: ["446"], term: true, cab: "Príncipe Pío", tipo: "est", c: ["C-10"], metro: true },
   { n: "Aravaca", corto: "Aravaca", t: 6, esc: 3, tipo: "ap", c: ["C-10"], ml: true },
   { n: "Pozuelo", corto: "Pozuelo", t: 9, esc: 3, rotVias: ["vía 4"], apartVias: ["vía 4"], tipo: "est", rot: true, c: ["C-10"] },
@@ -151,6 +158,27 @@ const ESTACIONES = [
   { n: "La Garena", corto: "La Garena", t: 96, esc: 3, tipo: "ap", c: ["C-2", "C-8"] },
   { n: "Alcalá de Henares", corto: "Alcalá", t: 100, esc: 5, rotVias: ["vía 1", "vía 2", "vía 4", "vía 6"], apartVias: ["vía 2", "vía 4", "vía 6"], term: true, cab: "Alcalá de Henares", tipo: "est", c: ["C-2", "C-8"] },
 ];
+/* C-1 · Chamartín – Aeropuerto T4. Quince minutos de recorrido, siete de
+   inversión en el aeropuerto y ocho en Chamartín: el ciclo sale de 45 min,
+   que con intervalo de 15 son exactamente tres circulaciones y hace cuadrar
+   el horario real de salidas a y 05, y 20, y 35 y y 50.               */
+const EST_C1 = [
+  // en Chamartín la C-1 usa la vía 12, y la 9B y la 10B cuando hace falta
+  { n: "Chamartín", corto: "Chamartín", t: 0, esc: 5, rotVias: ["vía 12", "vía 9B", "vía 10B"], apartVias: ["M6", "M8", "M10", "M12", "M14", "M16"], cab: "Chamartín", tipo: "est", term: true, c: ["C-2", "C-3", "C-4", "C-7", "C-8", "C-10"], metro: true },
+  { n: "Fuente de la Mora", corto: "F. de la Mora", t: 4, esc: 2, tipo: "ap", c: [], metro: true },
+  /* Sin servicio comercial, como Vallecas Industrial en la C-7, pero con
+     agujas y dos vías donde estacionar material.                       */
+  /* Tiene apartadero, luego tiene agujas: delimita tramo de vía única aunque
+     no preste servicio ni tenga vía desviada de paso.                  */
+  { n: "Hortaleza", corto: "Hortaleza", t: 7, esc: 2, tipo: "est", puesto: true, agujas: true, apartVias: ["vía 5", "vía 22"], gen: [{ via: "vía 3", dir: "alcala" }, { via: "vía 4", dir: "pio" }], c: [] },
+  // en el túnel del Aeropuerto, entre Hortaleza y la terminal
+  { sot: true, n: "Valdebebas", corto: "Valdebebas", t: 10, esc: 2, tipo: "ap", c: [], metro: false },
+  { sot: true, n: "Aeropuerto T4", corto: "Aeropuerto T4", t: 15, esc: 5, rotVias: ["vía 1", "vía 2"], apartVias: ["M1", "M3"], cab: "Aeropuerto T4", tipo: "est", term: true, c: [], metro: true },
+];
+
+/* Ficha de cada línea. Todo lo que el motor necesita saber para trabajar con
+   ella: infraestructura, tiempos y material admitido.                  */
+let ESTACIONES = EST_C7; // catálogo de la línea vigente
 
 /* Tramos que la C-7 comparte con otras líneas. Se indexan por nombre de
    estación y no por número: al añadir los puestos de circulación todas las
@@ -158,49 +186,103 @@ const ESTACIONES = [
 /* Cada banda se dibuja justo encima de la estación indicada, de modo que
    queda entre esa y la anterior. Túnel de la Risa va entre Chamartín y
    Nuevos Ministerios, y el Corredor del Henares entre Atocha y Entrevías. */
-const BANDAS_DEF = [
+const BANDAS_C7 = [
   { antesDe: "Príncipe Pío", n: "Las Rozas – Príncipe Pío", d: "con C-10" },
   { antesDe: "Pitis", n: "El Pardo – Pitis", d: "con C-8" },
   { antesDe: "Nuevos Ministerios", n: "Túnel de la Risa", d: "con C-2, C-8 y C-10" },
   { antesDe: "Asamblea de Madrid – Entrevías", n: "Corredor del Henares", d: "con C-2 y C-8" },
 ];
 
-const BANDAS = Object.fromEntries(
-  BANDAS_DEF.map((b) => [ESTACIONES.findIndex((e) => e.n === b.antesDe), { n: b.n, d: b.d }]).filter(([k]) => k >= 0)
-);
+// tramos singulares de la C-1
+const BANDAS_C1 = [
+  { antesDe: "Valdebebas", n: "Túnel del Aeropuerto", d: "Valdebebas y T4 en subterráneo" },
+];
 
-const N = ESTACIONES.length;
+let BANDAS = {}; // se rehace al fijar la línea
+
+/* Líneas que se juegan en esta partida. El resto del núcleo ya está declarado
+   con su color y aparece en el selector: incorporarlas es añadir su ficha a
+   LINEAS y su identificador aquí.                                      */
+let LINEAS_EN_JUEGO = ["C-7"]; // las que elija el jugador al empezar
+
+const LINEAS = {
+  "C-7": {
+    id: "C-7",
+    estaciones: EST_C7,
+    recorrido: 100,
+    invA: 20, // inversión en el extremo alto (Alcalá)
+    invB: 40, // inversión en el extremo bajo (Príncipe Pío)
+    intervalo: 20,
+    longitud: 71.6,
+    series: ["446", "465", "450"],
+    dobles: true, // admite composiciones dobles
+    viajerosDia: 150000,
+    desfase: 0, // minuto de la hora en que arranca la cadencia
+    // siglas del destino de cada sentido
+    siglaAlta: "AH",
+    siglaBaja: "PP",
+    serie: 21800, // numeración de las marchas
+    serieVacio: 37200,
+    bandas: BANDAS_C7
+  },
+  "C-1": {
+    id: "C-1",
+    estaciones: EST_C1,
+    recorrido: 15,
+    invA: 7, // Aeropuerto T4
+    invB: 8, // Chamartín
+    intervalo: 15,
+    longitud: 12.4,
+    series: ["465"],
+    dobles: false, // solo Civia en composición sencilla
+    viajerosDia: 18500,
+    // salidas de Chamartín a y 05, y 20, y 35 y y 50
+    desfase: 5,
+    // pares hacia el Aeropuerto (BT), impares hacia Chamartín (MH)
+    siglaAlta: "BT",
+    siglaBaja: "MH",
+    serie: 19800,
+    serieVacio: 35200,
+    bandas: BANDAS_C1
+  },
+};
+
+
+
+
+let N = ESTACIONES.length;
 
 /* Índices de las tres cabeceras. Se calculan a partir del nombre para que
    añadir o quitar paradas no vuelva a descolocar nada: estaban escritos a
    mano y al insertar los puestos de circulación dejaron de apuntar donde
    debían.                                                                */
-const IDX_PIO = 0;
-const IDX_CHAMARTIN = ESTACIONES.findIndex((e) => e.n === "Chamartín");
-const IDX_ALCALA = N - 1;
+let IDX_PIO = 0;
+let IDX_CHAMARTIN = ESTACIONES.findIndex((e) => e.n === "Chamartín");
+let IDX_ALCALA = N - 1;
 // puntos donde la C-7 comparte vía con mercancías, buscados por nombre
-const IDX_ROZAS = ESTACIONES.findIndex((e) => e.n === "Las Rozas");
-const IDX_PITIS = ESTACIONES.findIndex((e) => e.n === "Pitis");
-const IDX_VICALVARO = ESTACIONES.findIndex((e) => e.n === "Vicálvaro");
-const RECORRIDO = 100; // min de extremo a extremo
-const INV_ALCALA = 20; // rotación en Alcalá de Henares
-const INV_PIO = 40; // rotación en Príncipe Pío
+let IDX_ROZAS = ESTACIONES.findIndex((e) => e.n === "Las Rozas");
+let IDX_PITIS = ESTACIONES.findIndex((e) => e.n === "Pitis");
+let IDX_VICALVARO = ESTACIONES.findIndex((e) => e.n === "Vicálvaro");
+let RECORRIDO = 100; // min de extremo a extremo
+let INV_ALCALA = 20; // inversión en el extremo alto
+let INV_PIO = 40; // inversión en el extremo bajo
 const MANIOBRA = 4; // mínimo técnico para invertir en estación intermedia
 const MIN_ANTELACION = 3; // margen mínimo para preparar el itinerario de rotación
-const CICLO = RECORRIDO * 2 + INV_ALCALA + INV_PIO; // 260 min
-const INTERVALO = 20; // frecuencia cadenciada
+let CICLO = RECORRIDO * 2 + INV_ALCALA + INV_PIO;
+let INTERVALO = 20; // frecuencia cadenciada
 // fases clave del ciclo
-const LLEGA_ALCALA = RECORRIDO; // 100
-const SALE_ALCALA = RECORRIDO + INV_ALCALA; // 120
-const LLEGA_PIO = SALE_ALCALA + RECORRIDO; // 220
-const LONGITUD = 71.6; // km de extremo a extremo
-const KM_MIN = LONGITUD / RECORRIDO; // km recorridos por minuto
+let DESFASE = 0; // minuto de la hora en que empieza la cadencia
+let LLEGA_ALCALA = RECORRIDO;
+let SALE_ALCALA = RECORRIDO + INV_ALCALA;
+let LLEGA_PIO = SALE_ALCALA + RECORRIDO;
+let LONGITUD = 71.6; // km de extremo a extremo
+let KM_MIN = LONGITUD / RECORRIDO;
 
-const CHAMARTIN = "Chamartín";
-const ALCALA = "Alcalá de Henares";
-const PIO = "Príncipe Pío";
-const T_CHAMARTIN = 41;
-const PASOS = [
+let CHAMARTIN = "Chamartín";
+let ALCALA = "Alcalá de Henares"; // nombre del extremo alto
+let PIO = "Príncipe Pío"; // nombre del extremo bajo
+let T_CHAMARTIN = 41;
+let PASOS = [
   { q: T_CHAMARTIN, cab: CHAMARTIN },
   { q: LLEGA_ALCALA, cab: ALCALA },
   { q: LLEGA_PIO - T_CHAMARTIN, cab: CHAMARTIN },
@@ -215,14 +297,146 @@ let INICIO = 6 * 60;
 let FIN = 14 * 60;
 let TURNO_ID = "manana";
 
+/* Cambia la línea con la que trabaja el motor. Recalcula todo lo que se deriva
+   de su infraestructura: índices, fases del ciclo, pesos de demanda y puntos
+   de paso. Se llama antes de procesar cada línea.                      */
+/* Maquinistas de reserva de la RED, no de una línea. Están donde están, y
+   acude a ellos cualquier línea que pase por esa estación: jugando solo la
+   C-1, los cinco de Chamartín siguen ahí, porque no son de la C-7.
+
+   De los que están en una estación por la que no pasa ninguna línea en juego
+   se prescinde, porque no podrían llegar a ningún sitio.               */
+const RESERVAS_RED = [
+  ["Chamartín", 5],
+  ["Alcalá de Henares", 1],
+  ["Príncipe Pío", 1],
+];
+
+let RESERVAS = [];
+
+/* ── convivencia de varias líneas ───────────────────────────────
+   El estado del turno guarda por separado lo que pertenece a cada línea
+   (trenes, personal, andenes, restricciones, material) de lo que es común
+   (reloj, taller, libro, incidencias). El motor procesa una línea cada vez:
+   entra en ella, hace su minuto y sale.
+
+   Las líneas que se juegan salen de LINEAS_EN_JUEGO. Añadir la C-2 o la C-10
+   el día de mañana será declararlas en LINEAS y añadirlas aquí.        */
+const CAMPOS_LINEA = ["trenes", "personal", "andenes", "restricciones", "reserva", "apartado", "vacios", "estad", "averiasTurno", "cal"];
+
+// se guarda en el estado el trozo que pertenece a la línea vigente
+function guardarLinea(g, id) {
+  if (!g.porLinea) g.porLinea = {};
+  const trozo = {};
+  for (const k of CAMPOS_LINEA) trozo[k] = g[k];
+  g.porLinea[id] = trozo;
+}
+
+// se saca a primer plano el trozo de la línea pedida y se fijan sus constantes
+function entrarLinea(g, id) {
+  fijarLinea(id);
+  const trozo = (g.porLinea && g.porLinea[id]) || {};
+  for (const k of CAMPOS_LINEA) if (trozo[k] !== undefined) g[k] = trozo[k];
+  g.linea = id;
+}
+
+/* Cambia la línea que se está mirando. No altera la simulación: solo saca a
+   primer plano el estado de esa línea para que lo vean las pantallas.  */
+function cambiarVista(g, id) {
+  if (!g || !g.porLinea || !g.porLinea[id]) return g;
+  const n = clonar(g);
+  guardarLinea(n, n.linea || LINEAS_EN_JUEGO[0]);
+  entrarLinea(n, id);
+  return n;
+}
+
+function fijarLinea(id) {
+  const L = LINEAS[id] || LINEAS["C-7"];
+  LINEA = L.id;
+  ESTACIONES = L.estaciones;
+  N = ESTACIONES.length;
+  RECORRIDO = L.recorrido;
+  INV_ALCALA = L.invA;
+  INV_PIO = L.invB;
+  INTERVALO = L.intervalo;
+  LONGITUD = L.longitud;
+  CICLO = RECORRIDO * 2 + INV_ALCALA + INV_PIO;
+  CIRCULACIONES = Math.round(CICLO / INTERVALO);
+  LLEGA_ALCALA = RECORRIDO;
+  SALE_ALCALA = RECORRIDO + INV_ALCALA;
+  LLEGA_PIO = SALE_ALCALA + RECORRIDO;
+  KM_MIN = LONGITUD / RECORRIDO;
+
+  // los extremos se leen del propio catálogo: cada línea tiene los suyos
+  PIO = ESTACIONES[0].n;
+  ALCALA = ESTACIONES[N - 1].n;
+  IDX_PIO = 0;
+  IDX_ALCALA = N - 1;
+  const iCh = ESTACIONES.findIndex((e) => e.n === "Chamartín");
+  IDX_CHAMARTIN = iCh >= 0 ? iCh : 0;
+  CHAMARTIN = ESTACIONES[IDX_CHAMARTIN].n;
+  T_CHAMARTIN = ESTACIONES[IDX_CHAMARTIN].t;
+  IDX_ROZAS = ESTACIONES.findIndex((e) => e.n === "Las Rozas");
+  IDX_PITIS = ESTACIONES.findIndex((e) => e.n === "Pitis");
+  IDX_VICALVARO = ESTACIONES.findIndex((e) => e.n === "Vicálvaro");
+
+  PASOS = [
+    { q: T_CHAMARTIN, cab: CHAMARTIN },
+    { q: LLEGA_ALCALA, cab: ALCALA },
+    { q: LLEGA_PIO - T_CHAMARTIN, cab: CHAMARTIN },
+    { q: CICLO, cab: PIO },
+  ];
+
+  CENTRO = Math.round(RECORRIDO / 2);
+  CENTRALIDAD = ESTACIONES.map((e) => 1 - Math.abs(e.t - CENTRO) / Math.max(CENTRO, RECORRIDO - CENTRO));
+  PESO = ESTACIONES.map((e) => (e.puesto ? 0 : PESO_ESC[e.esc] || 4));
+  CORRESPONDENCIA = ESTACIONES.map((e) => {
+    if (e.puesto) return 1;
+    return Math.min(TOPE_CORR, 1 + (e.c || []).length * PESO_CER + (e.metro ? PESO_METRO : 0));
+  });
+
+  /* Reservas donde de verdad puede relevarse esta línea: sus dos extremos, y
+     Chamartín aparte si es una parada intermedia.                      */
+  const defBandas = L.bandas || [];
+  BANDAS = Object.fromEntries(
+    defBandas.map((b) => [ESTACIONES.findIndex((e) => e.n === b.antesDe), { n: b.n, d: b.d }]).filter(([k]) => k >= 0)
+  );
+
+  DATOS_DIR = {
+    pio: { sentido: L.siglaBaja || "PP", paridad: "impares" },
+    alcala: { sentido: L.siglaAlta || "AH", paridad: "pares" },
+  };
+  SIN_GENERALES = [...new Set([IDX_PIO, IDX_CHAMARTIN, IDX_ALCALA])];
+  CON_SERVICIO = ESTACIONES.filter((e) => !e.puesto).length;
+
+  DESFASE = L.desfase || 0;
+  VIAJEROS_DIA = L.viajerosDia || 150000;
+  VIAJEROS_MIN_100 = VIAJEROS_DIA / HORAS_INTENSIDAD / 60;
+
+  SERIE_TREN = L.serie || 21800;
+  SERIE_VACIO = L.serieVacio || 37200;
+
+  CABECERAS_REP = [...new Set([IDX_PIO, IDX_CHAMARTIN, IDX_ALCALA])].filter((i) => ESTACIONES[i]);
+  KM_TURNO = Math.round(((LONGITUD / RECORRIDO) * (FIN - INICIO)) / 10) * 10;
+
+  APART_INICIAL = [...new Set([IDX_PIO, IDX_CHAMARTIN, IDX_ALCALA])].filter((i) => ESTACIONES[i] && ESTACIONES[i].apartVias);
+
+  /* Las reservas de la RED que caen en estaciones de esta línea. Se dan de
+     alta con la primera línea que las alcance y pasan a la bolsa común del
+     turno, así que jugar solo la C-1 no deja al puesto sin nadie.      */
+  RESERVAS = RESERVAS_RED.filter(([donde]) => ESTACIONES.some((e) => e.n === donde));
+}
+
 function fijarTurno(id) {
   const t = TURNOS.find((x) => x.id === id) || TURNOS[0];
   TURNO_ID = t.id;
   INICIO = t.ini;
   FIN = t.fin;
+  // depende de la duración del turno y del recorrido de la línea
+  KM_TURNO = Math.round(((LONGITUD / RECORRIDO) * (FIN - INICIO)) / 10) * 10;
 }
-const KM_TURNO = Math.round(((LONGITUD / RECORRIDO) * (FIN - INICIO)) / 10) * 10; // km que recorre una unidad en el turno
-const CIRCULACIONES = CICLO / INTERVALO; // 13 trenes simultáneos
+let KM_TURNO = Math.round(((LONGITUD / RECORRIDO) * (FIN - INICIO)) / 10) * 10; // km que recorre una unidad en el turno
+let CIRCULACIONES = CICLO / INTERVALO; // 13 trenes simultáneos
 
 /* ── catálogo de material · serie 446 ───────────────────────── */
 
@@ -400,9 +614,334 @@ const CATALOGO = [
 ];
 
 const DISPONIBLES_C7 = CATALOGO.filter((u) => DEPOSITOS[u.deposito].c7 && !u.otraLinea);
-const esSimple = (id) => !!id && CATALOGO.find((u) => u.id === id).serie === "450";
-const slotCompleto = (par) => (par[0] ? (esSimple(par[0]) ? !par[1] : !!par[1]) : false);
+/* Una unidad circula sola cuando es de doble piso o cuando la línea no admite
+   acoplamiento: la C-1 se cubre con un Civia por circulación.          */
+/* Una unidad circula sola cuando es de doble piso o cuando la línea no admite
+   acoplamiento. La línea se puede pasar como argumento: al comprobar varias a
+   la vez no vale mirar cuál está fijada, porque entonces se juzgan todas con
+   las reglas de una sola.                                              */
+const esSimple = (id, idLinea) => {
+  if (!id) return false;
+  // si el identificador no corresponde a ninguna línea, manda la vigente
+  const L = LINEAS[idLinea] || LINEAS[LINEA] || {};
+  if (!L.dobles) return true;
+  return CATALOGO.find((u) => u.id === id).serie === "450";
+};
+const slotCompleto = (par, idLinea) => (par[0] ? (esSimple(par[0], idLinea) ? !par[1] : !!par[1]) : false);
 const LIBRES_C7 = DISPONIBLES_C7.filter((u) => !u.enTaller);
+
+/* ── reacciones de los viajeros ─────────────────────────────────
+   Lo que la gente publica mencionando a la cuenta de la operadora. No es
+   decoración: es la única forma de que la calidad del servicio se note como
+   algo que sufre alguien, y no como un número que baja.
+
+   Los mensajes los genera el MOTOR en el minuto en que pasa algo, no la
+   pantalla: si los generara al dibujar, cambiarían en cada refresco y se
+   perderían al guardar la partida.                                     */
+
+const PILA_USUARIO = [
+  "Ana", "Marta", "Laura", "Carmen", "Elena", "Lucía", "Sara", "Cristina", "Patricia", "Raquel",
+  "Javier", "Sergio", "Alberto", "Rubén", "Iván", "Óscar", "Dani", "Pablo", "Jorge", "Álvaro",
+  "Miguel", "Nacho", "Fran", "Rocío", "Paula", "Irene", "Alba", "Nerea", "Andrea", "Silvia",
+  "Adrián", "Héctor", "Guille", "Toni", "Bea", "Noelia", "Vanessa", "Mónica", "Estefanía", "Jose",
+  "Manu", "Rafa", "Borja", "Gonzalo", "Marcos", "Diego", "Hugo", "Aitor", "Unai", "Samuel",
+  "Natalia", "Verónica", "Lorena", "Tamara", "Yolanda", "Inma", "Pilar", "Rosa", "Susana", "Amaia",
+  "Chema", "Quique", "Lolo", "Kiko", "Nando", "Santi", "Edu", "Luismi", "Juanjo", "Paco",
+  "Miriam", "Bárbara", "Clara", "Ángela", "Celia", "Marina", "Judith", "Ainhoa", "Leire", "Olga",
+  "Ismael", "Yeray", "Cristian", "Jonathan", "Sebas", "Ricardo", "Emilio", "Julián", "Salva", "Tito",
+];
+
+const APODOS = [
+  "elpuntual", "mad", "_", "rrhh", "dice", "oficial", "real", "vlc", "87", "92", "malasaña",
+  "vallecas", "opina", "escribe", "aqui", "otravez", "cansado", "runner", "madridista", "atleti",
+  "profe", "enfermera", "dev", "arq", "gatoloco", "cafeina", "sinfiltro", "9", "23", "hoy",
+  "mad_", "tren", "andenes", "cercanias", "abonado", "usuario", "sufrido", "resignado", "harto",
+  "77", "81", "95", "01", "_real", "_mad", "xx", "zzz", "oficial_", "eldeverdad", "otro",
+  "coslada", "alcala", "pinto", "getafe", "leganes", "torrejon", "aravaca", "pozuelo",
+  "opinaydice", "nosecalla", "delotro", "porlamanana", "denoche", "conprisa", "sinprisa",
+  "fotografo", "musico", "opositor", "autonomo", "teletrabajo", "turnodenoche", "abonotransporte",
+  "bcn", "vigo", "sevilla", "curro", "oficina", "campus", "uni", "erasmus", "papa", "mama",
+];
+
+const APELLIDO_USER = [
+  "Gómez", "Ruiz", "Molina", "Cano", "Pardo", "Herrera", "Nieto", "Bravo", "Vega", "Ferrer",
+  "Rojas", "Cuesta", "Prieto", "Lara", "Aguilar", "Benítez", "Caballero", "Duarte", "Esteban",
+  "Fuentes", "Gallardo", "Hidalgo", "Izquierdo", "Jurado", "Lozano", "Marín", "Navarro", "Olmedo",
+  "Peña", "Quirós", "Rivas", "Sanz", "Tejada", "Ureña", "Valero", "Zamorano", "Arias", "Bermejo",
+  "Crespo", "Delgado", "Escudero", "Figueroa", "Garrido", "Hurtado", "Ibáñez", "Jiménez", "Leal",
+];
+
+
+
+
+/* Avatar: iniciales sobre un color estable, deducido del propio nombre. Con
+   una paleta corta se repiten colores, que es lo que pasa en la realidad. */
+const COLOR_AVATAR = ["#8E5B9F", "#2E7D8A", "#B5643C", "#4A6FA5", "#6B8E3D", "#A34A5E", "#3F7D5A", "#7A5C3E", "#5D5FA3", "#9A6B2F"];
+
+/* Plantillas por MOTIVO y por tono. Las variables se sustituyen al generar:
+   {L} línea · {E} estación · {M} minutos · {H} hora · {T} tren · {D} destino.
+   Hacen falta muchas por motivo, porque un turno genera cientos de mensajes y
+   la repetición se nota enseguida.                                      */
+const REACCIONES = {
+  retraso: [
+    "El {T} lleva {M} minutos y el panel sigue diciendo \"próxima llegada\". Próxima cuándo",
+    "{M} minutos. Empiezo a pensar que el horario es una sugerencia",
+    "Segunda semana seguida llegando tarde por culpa del {T}",
+    "En {E} llevamos {M} minutos y ha pasado un tren de largo sin parar. Toma ya",
+    "El {T} lleva {M} minutos. He hecho la compra mental entera esperando",
+    "Mi jefe ya no se cree que sea el tren. Y sin embargo son {M} minutos otra vez",
+    "Han anunciado 5 minutos de retraso. Llevamos {M}. Redondead mejor",
+    "Otra vez parados en {E}. {M} minutos ya. Alguien piensa dar una explicación o nos enteramos por el boca a boca",
+    "{M} minutos de retraso en {L}. Todos los días lo mismo, ya ni me molesto en calcular",
+    "@CercaniasMadrid llevo {M} minutos en {E} sin información ninguna. Un poquito de respeto a la gente que madruga",
+    "Qué manía con que los horarios sean orientativos en {L}",
+    "Menos mal que salí con margen. {M} minutos tirados en {E} @CercaniasMadrid",
+    "{L} otra vez de retraso. A este paso llego ayer",
+    "Parados en {E} desde hace {M} minutos y el maquinista tan callado como nosotros",
+    "Si llego tarde otra vez me despiden, pero eso a {L} le da igual",
+    "Vaya servicio de {L}, {M} minutos y sin un solo aviso por megafonía",
+    "@CercaniasMadrid alguien puede explicar por qué llevamos {M} minutos detenidos en {E}",
+    "{M} minutos. {M}. Y el cartel sigue diciendo que viene a su hora",
+    "Yo pago un abono para esto. {M} minutos parada en {E}",
+    "El tren de {L} lleva {M} minutos de retraso y en el panel pone que está al llegar. Cachondeo",
+    "Cada mañana la misma tortura con {L}",
+    "{M} minutos esperando en {E}. Me da tiempo a echar la siesta",
+    "Lo de {L} ya no es retraso, es una forma de vida",
+    "Buenos días, {M} minutos de retraso, como siempre. Un saludo",
+    "En {E} llevamos {M} minutos. Ni un aviso, ni una disculpa, nada",
+    "Otro día que llego tarde por culpa de {L}. Van tres esta semana",
+    "El {T} lleva {M} minutos de retraso y nadie da explicaciones",
+    "Alguien sabe qué le pasa al {T}. Llevamos {M} minutos parados en {E}",
+    "{M} minutos el {T} con destino {D}. Y sin una sola disculpa",
+    "Voy en el {T} y esto no avanza. {M} minutos desde {E}",
+    "El {T} de las {H} otra vez tarde. Es que es SIEMPRE el mismo",
+    "Si cogéis el {T} hoy, id con tiempo. {M} minutos lleva",
+    "Parados en {E}. El {T}, dirección {D}. {M} minutos. Sin megafonía",
+    "Llevo desde {E} en el {T} y no hemos avanzado nada en {M} minutos",
+    "{M} minutos parados y la gente empezando a ponerse nerviosa en {E}",
+  ],
+  aglomeracion: [
+    "Imposible subir al {T} en {E}. Y el siguiente en veinte minutos",
+    "Van tres trenes que no puedo coger en {E}. Voy a llegar tardísimo",
+    "El {T} sale de {E} con las puertas rozando a la gente. Un día pasa algo",
+    "Esto no es un servicio de cercanías, es una lata. {T} desde {E}",
+    "Vamos tan apretados en el {T} que no puedo ni sacar el móvil del bolsillo",
+    "Andén de {E} desbordado. Hay gente al filo de la vía por falta de sitio",
+    "Imposible subir en {E}. Van dos trenes que me dejan tirado",
+    "Vamos como sardinas en {L}. Esto no puede ser legal",
+    "En {E} se ha quedado media estación sin poder subir",
+    "No cabe un alfiler en el tren de {L}. Y encima con este calor",
+    "He dejado pasar dos trenes en {E} porque venían reventados",
+    "{L} a las {H} es una lata de conservas con ruedas",
+    "Andén de {E} lleno hasta arriba y el tren viene sin sitio. Genial",
+    "@CercaniasMadrid habéis viajado alguna vez en vuestro propio tren a las {H}",
+    "Tercer tren que no puedo coger en {E}. Voy a llegar para la cena",
+    "Esto no es un tren, es una jaula. {L} a tope otra vez",
+    "En {E} la gente empuja para entrar. Un día habrá un disgusto",
+    "Vaya aglomeración en {E}. Y dicen que refuerzan el servicio",
+    "No me cabe ni el bolso en el tren de {L}",
+    "El {T} viene lleno desde {E}. Imposible subir",
+    "Van cuatro tirando de la puerta del {T} en {E} para poder entrar",
+    "El {T} hacia {D} sale de {E} con gente pegada a los cristales",
+    "He conseguido meterme en el {T} de milagro. Va reventado",
+    "Se me han quedado dos personas en la puerta sin poder entrar en {E}",
+  ],
+  supresion: [
+    "Suprimido el {T}. Y el siguiente en media hora. A ver cómo llego yo ahora",
+    "Han cancelado el tren cuando ya estábamos todos en el andén de {E}. Sin más explicación",
+    "Suprimen el {T} y meten a toda esa gente en el siguiente. Va a ir imposible",
+    "Tercer tren suprimido esta semana en la {L}. Esto no es mala suerte, es dejadez",
+    "Cancelado mi tren en {E}. Voy a llegar hora y media tarde al trabajo",
+    "Suprimir un tren en hora punta es de una insensibilidad tremenda",
+    "Han suprimido el tren de {L} y aquí estamos, tirados en {E}",
+    "Suprimen trenes como quien quita una parada de autobús. Muy bien @CercaniasMadrid",
+    "Otro tren menos en {L}. Y los que quedan vendrán llenos, claro",
+    "Me acaban de decir que mi tren no viene. Así, sin más. {L}",
+    "Suprimido el de las {H}. Media hora más esperando en {E}",
+    "¿Suprimir trenes en hora punta es la solución? Increíble lo de {L}",
+    "Cancelado el tren de {E}. Ni un aviso hasta que ya estabas en el andén",
+    "Un tren suprimido más. {L} batiendo su propio récord",
+    "Y el tren que iba a coger, suprimido. Qué gran día",
+  ],
+  averia: [
+    "El {T} averiado en {E} y el siguiente viene lleno. La pescadilla que se muerde la cola",
+    "Otro tren roto en la {L}. Con la edad que tiene este material tampoco sorprende",
+    "El {T} lleva toda la semana dando problemas. Cuándo lo mandáis al taller",
+    "Avería en {E}. Llevamos {M} minutos y el maquinista ha bajado a mirar los bajos",
+    "Se ha parado el {T} en seco en {E}. Luces fuera y silencio total",
+    "Avería en el tren de {L}. Menuda sorpresa",
+    "Vamos con una puerta precintada en {L}. Qué seguridad más grande",
+    "El tren de {L} va renqueando. Como para fiarse",
+    "Material viejo, averías cada dos por tres. Así va {L}",
+    "Avería en {E} y todos a esperar. Lo de siempre",
+    "Otro tren averiado en {L}. ¿Alguien revisa estos trenes alguna vez?",
+    "Se ha estropeado el tren en {E}. Nos han hecho bajar a todos",
+    "Llevamos parados por avería desde hace {M} minutos en {E}",
+  ],
+  calor: [
+    "En el {T} no funciona el aire y va lleno. Hay gente mareándose de verdad",
+    "37 grados fuera y el vagón sin aire. {L} señores, esto es peligroso",
+    "Dos vagones del {T} sin climatización. La gente amontonada en los otros tres",
+    "He tenido que bajarme en {E} porque no podía respirar dentro del tren",
+    "Aire acondicionado en el {T}: cero. Ventanas: no abren. Genial",
+    "Sin aire acondicionado en {L} y a {H}. Esto es inhumano",
+    "El vagón de {L} es una sauna. No se puede respirar",
+    "Aire acondicionado roto otra vez en {L}. Qué asco de viaje",
+    "Vamos sudando como pollos en el tren de {L}",
+    "Cero aire en el tren y la gente mareándose. Muy bien @CercaniasMadrid",
+    "Hace más calor aquí dentro que en la calle. @CercaniasMadrid señores",
+  ],
+  transbordo: [
+    "Nos hacen bajar en {E} y subir a otro tren que ya venía lleno. Un caos absoluto",
+    "Transbordo en {E} sin megafonía, sin personal y sin saber a qué andén. Que cada uno se busque la vida",
+    "Bajada obligatoria del {T} en {E}. Con la que está cayendo fuera además",
+    "Me han hecho cambiar de tren dos veces en el mismo trayecto. Dos",
+    "En {E} nos han bajado a todos y el tren se ha ido vacío. Alguien lo entiende",
+    "Nos hacen transbordar en {E} con el tren hasta arriba. Un caos",
+    "Transbordo forzoso en {E}. Nadie sabe a qué andén hay que ir",
+    "Bajada obligatoria en {E} y a esperar otra vez. Gracias @CercaniasMadrid",
+    "Nos echan del tren en {E} sin explicar nada",
+  ],
+  vialunica: [
+    "Vía única en {E} y los trenes turnándose. {M} minutos parados esperando al de enfrente",
+    "Circulando por la vía contraria en la {L}. Una experiencia",
+    "Con una sola vía funcionando esto es un cuello de botella. {M} minutos ya",
+    "Parados en {E} esperando a que pase el tren de enfrente. Esto es un apartadero de los años cincuenta",
+    "Nos han mandado por la vía del otro sentido. Curioso pero muy lento",
+    "Vía única en {L} y los trenes esperándose unos a otros. Para llorar",
+    "Van por una sola vía en {L}. Esto va a ser eterno",
+    "Nos han metido por la vía contraria. Curiosa experiencia en {L}",
+    "Con un solo carril funcionando, {L} es un desastre asegurado",
+  ],
+  /* Motivos ligados a una incidencia concreta. Aquí el viajero cuenta lo que
+     ve: el tren parado, los mecánicos, el transbordo, la megafonía. Es lo que
+     hace que se note que está dentro de la misma avería que has provocado. */
+  atls: [
+    "Llevamos {M} minutos en el {T} parados en {E}. Nos han dicho que viene un técnico. Desde dónde, desde Cuenca",
+    "El {T} muerto en {E}. Sin luces, sin aire y con las puertas cerradas. Esto es ilegal",
+    "Han venido dos operarios a mirar el {T} y llevan veinte minutos con un manual en la mano",
+    "Seguimos tirados en {E}. Ya hay gente que se ha bajado a la vía, con lo peligroso que es",
+    "El {T} sin moverse desde hace {M} minutos y la megafonía repitiendo que disculpemos las molestias",
+    "El {T} lleva parado en {E} desde hace {M} minutos esperando a unos mecánicos. Estamos dentro, sin aire y sin información",
+    "Nos han dicho que vienen los técnicos a arreglar el tren. En {E}. A las {H}. Perfecto",
+    "{M} minutos encerrados en el {T} en {E} esperando a que venga alguien a mirarlo",
+    "Han bajado el maquinista a mirar los bajos del tren en {E}. Esto pinta largo",
+    "El {T} averiado en plena vía y nosotros dentro. Llevamos {M} minutos, @CercaniasMadrid",
+    "Estamos parados entre estaciones. Nadie dice nada. El {T}, por si a alguien le interesa",
+    "Aquí seguimos en el {T}, en {E}, esperando a los de mantenimiento. {M} minutos ya",
+    "Avería del {T} en {E}. Han venido los técnicos y siguen ahí mirándolo. Genial",
+  ],
+  rescate: [
+    "Han mandado un tren a rescatarnos. A rescatarnos. En {E}. Año 2025",
+    "Nos han evacuado del {T} en {E} y hemos tenido que caminar por el andén hasta el otro tren",
+    "El {T} se ha quedado sin fuerza en {E} y viene otro a empujarlo. Increíble",
+    "Una hora en {E} esperando al tren de socorro. Con niños y con maletas",
+    "Nos han hecho bajar del {T} en {E} y esperar a otro tren. Con dos maletas y un niño",
+    "El {T} se ha quedado tirado y van a mandar otro a recogernos. {M} minutos aquí de pie",
+    "Transbordo de urgencia en {E}. El tren averiado ahí parado y todos apretados en el andén",
+    "Vienen a remolcar el {T}. Sí, a remolcarlo. En {E}. Esto es el primer mundo",
+    "Nos han evacuado el tren en {E}. Una hora de mi vida que no vuelve",
+    "El {T} no se mueve y han mandado otro tren a por nosotros. Menudo espectáculo en {E}",
+  ],
+  catenaria: [
+    "Otra vez la catenaria en {E}. Tercera vez este mes. Alguien va a revisar esos cables algún día",
+    "Nos han cortado la corriente en {E}. Sin luz, sin aire, y la gente empezando a agobiarse dentro",
+    "Han saltado chispas del pantógrafo en {E} y ha sido bajar todos corriendo. Menudo susto",
+    "Llevamos {M} minutos a oscuras en el {T} por lo de la catenaria. Esto no es normal",
+    "Se ha caído el cable en {E}. Con decir que ha venido hasta la policía",
+    "Lo de la catenaria en {E} va para largo. Ya nos han dicho que cojamos alternativa. Cuál, si puede saberse",
+    "Tres horas va a durar lo de la catenaria según megafonía. Tres horas. En {E}",
+    "Enganchón de catenaria en {E}. Los cables por el suelo y los trenes parados",
+    "Han tocado la catenaria en {E} y esto está muerto. {M} minutos sin moverse",
+    "Todo parado por lo de la catenaria en {E}. Nadie sabe cuánto va a durar",
+    "El pantógrafo del {T} ha enganchado el cable en {E}. Ahí se acabó la mañana",
+  ],
+  puertas: [
+    "El {T} parando en cada estación dos minutos porque una puerta no cierra. Así hasta {D}",
+    "Nos han bajado del {T} en {E} porque una puerta se ha quedado abierta en marcha. En marcha",
+    "Puerta bloqueada en el {T} y la gente saliendo por donde puede. Un día habrá un accidente",
+    "El maquinista lleva tres paradas peleándose con una puerta del {T}. Paciencia le doy",
+    "Una puerta del {T} abriéndose sola entre {E} y la siguiente. Normal todo",
+    "Cómo puede ser que un tren salga de cabecera con una puerta averiada. Explicadmelo",
+    "El {T} va con una puerta precintada. En hora punta. Muy seguro todo",
+    "Una puerta del {T} no abre en {E} y la gente empujando para salir por la de al lado",
+    "Llevamos parados en cada estación porque una puerta del {T} no cierra bien",
+    "Puerta averiada en el {T}. Un minuto extra en cada parada. Multiplícalo",
+  ],
+  freno: [
+    "Frenazo brutal del {T} llegando a {E}. Media gente por el suelo y ni una disculpa por megafonía",
+    "El {T} va a 40 por hora por un problema de frenos. Vamos a llegar de noche",
+    "Nos han parado en {E} por un problema de frenos y llevamos {M} minutos sin saber nada",
+    "El {T} ha frenado de golpe en {E}. Una señora se ha dado un buen golpe. Vergonzoso",
+    "Marcha limitada en el {T} por los frenos. {M} minutos de retraso y subiendo",
+    "Si el tren no frena bien, qué hace circulando con gente dentro. Es lo que me pregunto",
+    "El {T} va despacísimo por un problema de frenos. Llegaremos para la hora de comer",
+    "Parada de urgencia del {T} en {E}. Menudo frenazo, se ha caído gente",
+    "Problema de frenos en el {T} y marcha limitada. Así hasta {D}",
+  ],
+  ltv: [
+    "Limitación de velocidad indefinida entre {E} y {D}. Lo de indefinida asusta",
+    "Vamos a paso de hombre desde {E}. Llevo {M} minutos de retraso y no ha pasado nada",
+    "Otra limitación temporal que lleva puesta desde hace meses. De temporal nada",
+    "El {T} arrastrándose por la vía. Si vamos a ir así, ponedlo en el horario y ya",
+    "Limitación en {E} y nadie explica por qué. {M} minutos perdidos",
+    "Limitación de velocidad en {E}. Vamos a paso de peatón y {M} minutos tarde",
+    "Otra limitación temporal en la vía de la C-7. Como si no fuéramos ya justos",
+    "El tren reptando por {E} por una limitación. {M} minutos perdidos",
+  ],
+
+  /* Mensajes dirigidos a la cuenta oficial. Es el registro en que la gente
+     interpela directamente: unos piden explicaciones, otros ironizan y algunos
+     ya solo escriben por desahogarse.                                   */
+  mencion: [
+    "@CercaniasMadrid me podéis explicar qué hace el {T} veinte minutos parado en {E} sin que nadie diga ni mu",
+    "@CercaniasMadrid vuestro panel dice que el tren viene en 2 minutos. Lleva diciéndolo {M} minutos. Es un panel o un adorno",
+    "@CercaniasMadrid llevo {M} minutos en el andén de {E}. He visto pasar tres trenes de otra línea. Tres",
+    "@CercaniasMadrid no sé quién diseñó el horario de {L} pero desde luego no lo coge",
+    "@CercaniasMadrid en serio, {M} minutos. Tengo una reunión a las {H} y os la voy a facturar",
+    "@CercaniasMadrid el {T} va tan lleno que he viajado sin tocar el suelo. Ahorro en gimnasio, eso sí",
+    "@CercaniasMadrid una preguntita: para qué sirve la megafonía si nunca la usáis. Curiosidad desde {E}",
+    "@CercaniasMadrid os lo digo en serio, esto no puede seguir así. {M} minutos otra vez y ni una explicación",
+    "@CercaniasMadrid estoy en {E}, son las {H}, y mi tren no aparece. Ni en el panel ni en la vida real",
+    "@CercaniasMadrid vuestro tren me ha dejado tirado en {E} y he tenido que coger un taxi. Os paso el recibo",
+    "@CercaniasMadrid llevo pagando el abono desde hace diez años para esto. Una vergüenza lo del {T} hoy",
+    "@CercaniasMadrid si al menos avisarais. Uno se organiza. Pero así no hay manera. {M} minutos en {E}",
+    "@CercaniasMadrid he perdido la conexión por vuestra culpa. {M} minutos de retraso. Contentos",
+    "@CercaniasMadrid propuesta: poner un cartel en {E} que diga \"suerte\". Sería más honesto que el panel",
+    "@CercaniasMadrid mi hija llega tarde al colegio por tercera vez este mes. Y no por mi culpa precisamente",
+    "@CercaniasMadrid vais a decir algo o nos quedamos todos aquí en {E} mirándonos las caras",
+    "@CercaniasMadrid con lo que cuesta el abono transporte, lo mínimo sería que el {T} llegase. Digo yo",
+    "@CercaniasMadrid he desayunado, he leído el periódico y sigo en {E}. Buenos días",
+    "@CercaniasMadrid es que da igual la hora, da igual el día. Siempre igual con {L}",
+    "@CercaniasMadrid {M} minutos parados y el maquinista tan perdido como nosotros. Informad a vuestra gente al menos",
+  ],
+
+  bien: [
+    "Hay que decirlo: lo de {E} lo han resuelto rápido y bien. Gracias",
+    "Puntual el {T} hoy. Tomad nota, que también hay que decir lo bueno",
+    "El maquinista del {T} informando por megafonía cada cinco minutos. Eso es",
+    "Se agradece la información de hoy en {E}. Poco pero clara",
+    "Reconozco que han sacado el servicio adelante mejor de lo que pintaba",
+    "Pues hoy el tren de {L} ha llegado puntual. Se agradece",
+    "Rápidos resolviendo lo de {E}. Bien ahí",
+    "Sin incidencias en {L} esta mañana. Milagro",
+    "Hoy sí, {L} funcionando como debe. Ojalá siempre",
+    "Buena información por megafonía en {E}. Poco pero se agradece, @CercaniasMadrid",
+    "Han resuelto lo de {E} más rápido de lo que esperaba. Gracias @CercaniasMadrid",
+  ],
+  duro: [
+    "Vergüenza de servicio el de {L}. Así, con todas las letras",
+    "Lo de {L} es un escándalo y nadie hace nada",
+    "Que devuelvan el dinero del abono. {L} es una estafa",
+    "Cada día odio más tener que depender de {L}",
+    "@CercaniasMadrid dimisión de quien sea que gestione esto, por favor",
+    "Es que da igual lo que pase, {L} siempre lo hace peor",
+    "Llevo quince años cogiendo {L} y cada año va a peor",
+    "Estoy hasta las narices de {L}. Y de las excusas",
+    "Un desastre absoluto. {M} minutos y sin información. {L}",
+    "@CercaniasMadrid que alguien se haga responsable de esto de una vez",
+  ],
+};
 
 /* ── personal ───────────────────────────────────────────────── */
 
@@ -415,13 +954,6 @@ const APELLIDOS = [
 ];
 const INICIALES = "ABCDEFGHIJLMNPRSTVZ";
 const nombreDe = (k) => `${INICIALES[k % INICIALES.length]}. ${APELLIDOS[k % APELLIDOS.length]}`;
-
-// reservas de contingencia por cabecera: solo se tocan si algo se tuerce
-const RESERVAS = [
-  [CHAMARTIN, 5],
-  [ALCALA, 1],
-  [PIO, 1],
-];
 
 /* ── atributos del maquinista (0–100, aleatorios) ───────────────
    Puntualidad  100 → recupera 5 min cada 30 de viaje
@@ -481,6 +1013,24 @@ const situacionVis = (t, g) => situacion({ ...t, retraso: retrasoVis(t, g) }, g.
    Las medias se acumulan minuto a minuto. Las que se ven en la barra son la
    foto del instante: si al cerrar todo va bien, el parte diría que el turno
    fue bueno aunque a media mañana hubiera un caos.                       */
+/* Cada cuántos minutos se anota la posición para el gráfico de marcha. Con
+   uno por minuto las trece trazas ocupaban 84 KB en el guardado; cada dos
+   minutos bastan para que la línea se lea igual de bien.                */
+const PASO_TRAZA = 2;
+
+/* Gravedad de una incidencia. Tres niveles, y no se inventa un color nuevo:
+   el gris dice "esto se resuelve", el ámbar "esto afecta a la línea" y el rojo
+   "esto corta el servicio", que es lo que esos colores ya significan en el
+   resto del juego.                                                        */
+/* La franja lleva texto blanco encima, y el ámbar del sistema no da contraste
+   suficiente para eso (2,9:1). Cada grado tiene su tono de franja, algo más
+   oscuro, y conserva el color del sistema para el borde.               */
+const GRADOS = {
+  leve: { n: "Incidencia leve", col: () => P.info, franja: () => P.info, peso: 700 },
+  grave: { n: "Incidencia grave", col: () => P.warn, franja: () => "#A05F00", peso: 700 },
+  critica: { n: "Incidencia crítica", col: () => P.alert, franja: () => P.alert, peso: 800 },
+};
+
 const KPI_INICIAL = {
   muestras: 0,
   puntuales: 0,
@@ -530,8 +1080,12 @@ function situacion(t, reloj) {
    invierte —en cabecera o rotando en una estación con agujas—
    toma el número que corresponde a la marcha en que se inserta.  */
 
-const SERIE_TREN = 21800;
-const SERIE_VACIO = 37200; // marchas de material sin viajeros
+/* Serie de numeración, propia de cada línea. La convención es la misma en
+   todas: pares hacia el extremo alto del recorrido e impares hacia el bajo.
+   En la C-7 eso son pares hacia Alcalá; en la C-1, pares hacia el
+   Aeropuerto.                                                          */
+let SERIE_TREN = 21800;
+let SERIE_VACIO = 37200; // marchas de material sin viajeros
 const T0_NUM = 4 * 60; // primera salida numerada del día
 
 function numeroTren(t, reloj) {
@@ -687,7 +1241,11 @@ function avanzarMarchas(g, t, r) {
 
 function rotacionDelDia(t, desde = 5 * 60, hasta = 24 * 60) {
   const out = [];
-  for (let k = -3; k < 12; k++) {
+  /* Tantos ciclos como haga falta para cubrir el día. Con doce fijos, una
+     línea de ciclo corto se quedaba sin la mitad de su cuadro.         */
+  const kIni = Math.floor((desde - t.offset) / CICLO) - 1;
+  const kFin = Math.ceil((hasta - t.offset) / CICLO) + 1;
+  for (let k = kIni; k <= kFin; k++) {
     const salePio = t.offset + CICLO * k;
     const llegaAlc = salePio + RECORRIDO;
     const saleAlc = salePio + SALE_ALCALA;
@@ -810,8 +1368,15 @@ function programarRelevo(tren, maq, desdeReloj) {
   if (limite > FIN + 25) return null;
   const objetivo = limite - MARGEN_CUADRO;
 
+  /* Cuántos ciclos hay que recorrer para cubrir el turno. Estaba fijado en
+     ocho, que con el ciclo de 260 min de la C-7 sobra de largo, pero con los
+     45 min de la C-1 no llegaba ni al principio del turno: el cuadro salía
+     vacío y los maquinistas se quedaban sin relevo previsto.            */
+  const desde = Math.floor((desdeReloj - tren.offset) / CICLO) - 1;
+  const hasta = Math.ceil((FIN + 60 - tren.offset) / CICLO) + 1;
+
   const candidatos = [];
-  for (let n = -1; n < 8; n++) {
+  for (let n = desde; n <= hasta; n++) {
     for (const x of PASOS) {
       const T = tren.offset + x.q + CICLO * n;
       if (T < desdeReloj + 12 || T > objetivo) continue;
@@ -842,7 +1407,7 @@ function programarRelevo(tren, maq, desdeReloj) {
 
   // sin hueco cómodo: el primer paso disponible, sea donde sea
   let mejor = null;
-  for (let n = -1; n < 8; n++) {
+  for (let n = desde; n <= hasta; n++) {
     for (const x of PASOS) {
       const T = tren.offset + x.q + CICLO * n;
       if (T >= desdeReloj + 5 && (!mejor || T < mejor.T)) mejor = { T, cab: x.cab };
@@ -862,14 +1427,14 @@ function programarRelevo(tren, maq, desdeReloj) {
    tarde al revés.
    ══════════════════════════════════════════════════════════════ */
 
-const VIAJEROS_DIA = 150000;
+let VIAJEROS_DIA = 150000; // propio de cada línea
 const PESO_ESC = { 2: 2, 3: 4, 4: 8, 5: 16 };
 // los puestos de circulación no prestan servicio de viajeros: peso cero
-const PESO = ESTACIONES.map((e) => (e.puesto ? 0 : PESO_ESC[e.esc] || 4));
+let PESO = ESTACIONES.map((e) => (e.puesto ? 0 : PESO_ESC[e.esc] || 4));
 
 // centralidad 0 (extremos) a 1 (centro de la línea, junto a Nuevos Ministerios)
-const CENTRO = 46;
-const CENTRALIDAD = ESTACIONES.map((e) => 1 - Math.abs(e.t - CENTRO) / Math.max(CENTRO, RECORRIDO - CENTRO));
+let CENTRO = 46;
+let CENTRALIDAD = ESTACIONES.map((e) => 1 - Math.abs(e.t - CENTRO) / Math.max(CENTRO, RECORRIDO - CENTRO));
 
 // franjas horarias con su intensidad relativa
 const FRANJAS = [
@@ -882,7 +1447,7 @@ const FRANJAS = [
   { h0: 22, h1: 24, pct: 0.15 },
 ];
 const HORAS_INTENSIDAD = FRANJAS.reduce((n, f) => n + (f.h1 - f.h0) * f.pct, 0);
-const VIAJEROS_MIN_100 = VIAJEROS_DIA / HORAS_INTENSIDAD / 60; // subidas por minuto en toda la línea al 100 %
+let VIAJEROS_MIN_100 = VIAJEROS_DIA / HORAS_INTENSIDAD / 60; // subidas por minuto en toda la línea al 100 %
 
 const SESGO = 0.6;
 function intensidad(reloj) {
@@ -898,9 +1463,26 @@ function marea(reloj) {
   return 0;
 }
 
+/* Efecto de los transbordos. Una estación con correspondencia no solo sirve a
+   su barrio: recoge y suelta gente que viene o va por otra línea. Chamartín o
+   Atocha mueven muchísimo más de lo que les corresponde por tamaño, y hasta
+   ahora el juego las trataba como a cualquier otra de su escala.
+
+   Cada línea de Cercanías con la que enlaza suma un 22 %, y el Metro un 45 %,
+   que mueve mucho más volumen. El tope evita que un nudo como Atocha, con seis
+   líneas más Metro, se coma la línea entera.                           */
+const PESO_CER = 0.22;
+const PESO_METRO = 0.45;
+const TOPE_CORR = 2.6;
+let CORRESPONDENCIA = ESTACIONES.map((e) => {
+  if (e.puesto) return 1;
+  const lineas = (e.c || []).length;
+  return Math.min(TOPE_CORR, 1 + lineas * PESO_CER + (e.metro ? PESO_METRO : 0));
+});
+
 // peso de generación de una estación y peso de atracción como destino
-const pesoOrigen = (i, mar) => PESO[i] * (1 + SESGO * mar * (1 - CENTRALIDAD[i]));
-const pesoDestino = (i, mar) => PESO[i] * (1 + SESGO * mar * CENTRALIDAD[i]);
+const pesoOrigen = (i, mar) => PESO[i] * CORRESPONDENCIA[i] * (1 + SESGO * mar * (1 - CENTRALIDAD[i]));
+const pesoDestino = (i, mar) => PESO[i] * CORRESPONDENCIA[i] * (1 + SESGO * mar * CENTRALIDAD[i]);
 
 // reparto de destinos para quien sube en `i` viajando en `dir`
 function destinos(i, dir, mar) {
@@ -970,6 +1552,7 @@ function efectuarParada(g, t, i, dir) {
   // un viajero cuenta como transportado cuando llega a su destino
   const bajan = t.pax[i] || 0;
   g.kpi.transportados += bajan;
+  if (g.estad) g.estad.bajan[i] = (g.estad.bajan[i] || 0) + bajan;
   t.pax[i] = 0;
   const cap = plazasDe(t);
   const aBordo = t.pax.reduce((a, b) => a + b, 0);
@@ -985,6 +1568,7 @@ function efectuarParada(g, t, i, dir) {
   const interesados = tot > 0 ? enAnden * (totAlc / tot) : 0;
 
   const suben = Math.min(interesados, hueco);
+  if (g.estad) g.estad.suben[i] = (g.estad.suben[i] || 0) + suben;
   g.andenes[i][dir] = enAnden - suben;
 
   if (suben > 0 && totAlc > 0) {
@@ -1002,7 +1586,25 @@ function efectuarParada(g, t, i, dir) {
 
 /* ── apartaderos y frecuencia real por estación ─────────────── */
 
-const ocupadasEn = (g, i) => new Set((g.apartado[i] || []).map((x) => x.via));
+/* Vías ocupadas en una estación, mirando TODAS las líneas. Una vía es física:
+   si la C-7 ha dejado material en la M6 de Chamartín, la C-1 no puede meter
+   otro tren ahí. Antes cada línea llevaba su propia contabilidad y las dos
+   podían ocupar la misma.                                              */
+const ocupadasEn = (g, i) => {
+  const out = new Set((g.apartado[i] || []).map((x) => x.via));
+  const nombre = (ESTACIONES[i] || {}).n;
+  if (!nombre) return out;
+  const activa = g.linea || LINEAS_EN_JUEGO[0];
+  for (const [id, trozo] of Object.entries(g.porLinea || {})) {
+    if (id === activa) continue;
+    const j = ((LINEAS[id] || {}).estaciones || []).findIndex((e) => e.n === nombre);
+    if (j < 0) continue;
+    for (const x of (trozo.apartado || {})[j] || []) out.add(x.via);
+    // y las vías donde otra línea tiene un tren invirtiendo ahora mismo
+    for (const t of trozo.trenes || []) if (t.rotando && t.rotando.idx === j) out.add(t.rotando.via);
+  }
+  return out;
+};
 
 // vías libres para apartar material
 const viasLibres = (g, i) => {
@@ -1021,12 +1623,6 @@ const viasRotacion = (g, i) => {
   const oc = ocupadasEn(g, i);
   return e.rotVias.filter((v) => !oc.has(v));
 };
-
-// vías de inversión ocupadas ahora mismo por trenes en cabecera
-const viasConTren = (g, i, excluir) =>
-  new Set(g.trenes.filter((t) => t.estado !== "suprimido" && t.i !== excluir && t.viaCab && t.viaCab.idx === i).map((t) => t.viaCab.via));
-
-
 
 // vías de inversión realmente disponibles en una cabecera
 /* Vías de una cabecera que estarán libres dentro de `dt` minutos.
@@ -1126,10 +1722,12 @@ const faseEstacion = (i, dir) => (dir === "alcala" ? ESTACIONES[i].t : LLEGA_PIO
 // Vías generales: por ellas circulan los trenes con carácter normal.
 // La 1 es la de los impares (sentido Príncipe Pío) y la 2 la de los pares
 // (sentido Alcalá). Las cabeceras y Chamartín tienen numeración propia.
-const SIN_GENERALES = [IDX_PIO, IDX_CHAMARTIN, IDX_ALCALA];
+let SIN_GENERALES = [IDX_PIO, IDX_CHAMARTIN, IDX_ALCALA];
 // estaciones que de verdad prestan servicio, para contar afectados
-const CON_SERVICIO = ESTACIONES.filter((e) => !e.puesto).length;
-const DATOS_DIR = {
+let CON_SERVICIO = ESTACIONES.filter((e) => !e.puesto).length;
+/* Siglas del destino de cada sentido. Estaban escritas a mano con las de la
+   C-7, así que en la C-1 los andenes decían "hacia PP" y "hacia AH".    */
+let DATOS_DIR = {
   pio: { sentido: "PP", paridad: "impares" },
   alcala: { sentido: "AH", paridad: "pares" },
 };
@@ -1174,7 +1772,7 @@ function apartarMaterial(g, t, forzarIdx = null, forzarVia = null) {
   // se guardan dos vías de paso mientras siga habiendo trenes en línea
   const enLinea = g.trenes.filter((x) => x.estado !== "suprimido" && x.i !== t.i).length;
   const reserva = enLinea > 0 ? 2 : 0;
-  const disponibles = (i) => (TURNO_ID === "noche" && ESTACIONES[i].cab ? viasNocturnas(g, i, reserva) : viasLibres(g, i));
+  const disponibles = (i) => (TURNO_ID === "noche" && (ESTACIONES[i] || {}).cab ? viasNocturnas(g, i, reserva) : viasLibres(g, i));
   // en la retirada nocturna el destino es firme: no vale cualquier estación
   if (forzarIdx === null && t.supresion && t.supresion.noche) forzarIdx = t.supresion.idx;
   if (forzarIdx !== null && disponibles(forzarIdx).length) {
@@ -1255,6 +1853,15 @@ function etaPunto(t, reloj, i) {
 
 // delimitan tramo las cabeceras, las estaciones con vía desviada y las
 // bifurcaciones, que cambian de vía aunque no tengan dónde estacionar
+/* Nombre de cabecera de una estación, tolerando índices que no existan en la
+   línea vigente: los heredados de un turno anterior o de otra línea apuntan a
+   posiciones que aquí pueden estar fuera del catálogo.                 */
+function cabeceraDe(i) {
+  const e = ESTACIONES[i];
+  if (!e) return null;
+  return e.cab || e.n;
+}
+
 const tieneAgujas = (i) => i === 0 || i === N - 1 || !!ESTACIONES[i].rot || !!ESTACIONES[i].agujas;
 
 // tramo entre agujas que queda en vía única por una incidencia en `idx`
@@ -1264,13 +1871,28 @@ const tieneAgujas = (i) => i === 0 || i === N - 1 || !!ESTACIONES[i].rot || !!ES
    que terminaba una estación más allá del final y todo lo que consultara esa
    posición se venía abajo.                                              */
 function limitesTramo(idx) {
-  const p = Math.max(0, Math.min(N - 1, Math.round(idx)));
-  let a = p;
+  /* El tramo es el que ENCIERRA al punto, no el que empieza en la estación más
+     próxima. Antes se redondeaba: un tren averiado entre la Bifurcación y
+     Pitis se redondeaba a Pitis, y la vía única salía de Pitis a Chamartín,
+     dejando libre justo el trozo donde estaba el tren.                 */
+  /* Un índice que no sea un número deja el tramo en blanco y revienta al
+     escribirlo en el libro. Se recoge aquí, que es por donde entra.    */
+  const x = Number.isFinite(idx) ? Math.max(0, Math.min(N - 1, idx)) : 0;
+  let a = Math.floor(x);
   while (a > 0 && !tieneAgujas(a)) a -= 1;
-  let b = Math.min(N - 1, p + (tieneAgujas(p) ? 1 : 0));
+  let b = Math.ceil(x);
+  if (b <= a) b = a + 1; // el punto cae justo en una estación con agujas
   while (b < N - 1 && !tieneAgujas(b)) b += 1;
+
+  /* En el último punto de la línea no hay nada por delante: el tramo es el
+     anterior. Sin esto se devolvía un extremo fuera del catálogo y cualquier
+     cosa que lo nombrara —el libro, el mapa— fallaba.                  */
+  if (b > N - 1) {
+    b = N - 1;
+    a = Math.min(a, b - 1);
+    while (a > 0 && !tieneAgujas(a)) a -= 1;
+  }
   if (b <= a) {
-    // en el último tramo de la línea se retrocede en vez de salirse
     if (a >= N - 1) a = Math.max(0, N - 2);
     b = Math.min(N - 1, a + 1);
   }
@@ -1279,15 +1901,14 @@ function limitesTramo(idx) {
 
 const tramosUnicos = (g) => g.restricciones.filter((x) => x.dir && x.tramo);
 
-// posición continua del tren dentro del recorrido, en índice de estación
-function idxDe(t, reloj) {
-  const s = situacion(t, reloj);
-  return s.dir === "maniobra" ? s.idx : s.idx;
-}
-
 // tren que ocupa ahora mismo el tramo de vía única
 // ¿está el tren físicamente dentro del tramo de vía única?
+/* Un tren inmovilizado por avería está en la vía CORTADA, no en la que se
+   comparte: no ocupa el tramo de vía única, y de hecho es la razón de que
+   exista. Sin esta excepción tomaba la autorización y no la soltaba nunca,
+   porque no se mueve, y la línea se paraba en ambos sentidos.          */
 function dentroTramo(t, reloj, tramo) {
+  if (t.inmovil) return false;
   const s = situacion(t, reloj);
   if (s.dir === "maniobra") return false;
   return s.idx > tramo.a + 0.02 && s.idx < tramo.b - 0.02;
@@ -1301,6 +1922,9 @@ function retenerEnAcceso(g, t, tramo, dir, r) {
   const objetivo = dir === "alcala" ? ESTACIONES[acceso].t : LLEGA_PIO - ESTACIONES[acceso].t;
   let atras = fase(t, r) - objetivo;
   if (atras < 0) atras += CICLO;
+  /* Se coloca al tren EXACTAMENTE en la estación de acceso, que es donde
+     esperaría de verdad. El tope de seis minutos que hubo aquí lo dejaba
+     parado en plena vía, donde le pillara.                             */
   if (atras > 0 && atras < CICLO / 2) t.retraso += atras;
   t.enVU = null;
   if (!t.esperaCruce) {
@@ -1314,7 +1938,19 @@ function retenerEnAcceso(g, t, tramo, dir, r) {
 function enViaContraria(g, t) {
   const s = situacion(t, g.reloj);
   if (s.dir === "maniobra") return false;
-  return tramosUnicos(g).some((x) => x.dir === s.dir && s.idx > x.tramo.a && s.idx < x.tramo.b);
+  /* El tren averiado que provocó el corte no se desvía: está clavado en su
+     vía, y es justo por eso por lo que los demás pasan por la contraria. */
+  if (t.inmovil) return false;
+
+  /* Un tren que ya entró por la vía contraria la recorre hasta salir del
+     tramo, aunque la incidencia se resuelva mientras tanto. Antes se miraban
+     solo las restricciones vigentes, así que al levantarse el corte el tren
+     saltaba de vía en mitad del trayecto.                              */
+  if (t.porContraria) {
+    const dentro = s.dir === t.porContraria.dir && s.idx > t.porContraria.a && s.idx < t.porContraria.b;
+    if (dentro) return true;
+  }
+  return tramosUnicos(g).some((x) => x.dir === s.dir && s.idx > x.tramo.a && s.idx < x.tramo.b && x.tren !== t.i);
 }
 
 /* ── separación entre trenes ────────────────────────────────────
@@ -1369,13 +2005,21 @@ function asignarViasCabecera(g) {
 function aplicarSeparacion(g) {
   for (const dir of ["alcala", "pio"]) {
     const lista = g.trenes
-      // los que están en vía desviada (apartados, rotando o cambiando material)
-      // no ocupan la vía general y no pueden bloquear a los de atrás
-      .filter((t) => t.estado !== "suprimido" && !t.enDesviada && !t.rotando && !(t.detenido && t.detenido.cambio))
+      /* Los que están en vía desviada (apartados, rotando o cambiando material)
+         no ocupan la vía general y no pueden bloquear a los de atrás.
+
+         Tampoco lo hace un tren INMOVILIZADO por avería: está en la vía
+         cortada, y los de su sentido pasan por la contraria. Si sigue en la
+         cadena, todos los de atrás se apilan detrás de él y no avanza ninguno,
+         que es justo lo que ocurría al declararse la avería.            */
+      .filter((t) => t.estado !== "suprimido" && !t.enDesviada && !t.rotando && !t.inmovil && !(t.detenido && t.detenido.cambio))
       .map((t) => ({ t, pr: progresoDe(fase(t, g.reloj)) }))
       .filter((o) => o.pr && o.pr.dir === dir)
       .sort((a, b) => b.pr.x - a.pr.x);
-    if (lista.length) lista[0].t.bloqueadoPor = null;
+    /* Se limpia la marca en todos, no solo en el primero: antes se quedaba
+       pegada de un minuto anterior y la ficha seguía diciendo que el tren
+       estaba bloqueado por otro cuando ya circulaba con normalidad.    */
+    for (const o of lista) o.t.bloqueadoPor = null;
     for (let k = 1; k < lista.length; k++) {
       const lider = lista[k - 1];
       const seg = lista[k];
@@ -1479,9 +2123,19 @@ function viasParaApartar(g, t) {
     const enLinea = g.trenes.filter((x) => x.estado !== "suprimido" && x.i !== t.i).length;
     const libres = TURNO_ID === "noche" && e.cab ? viasNocturnas(g, i, enLinea > 0 ? 2 : 0) : viasLibres(g, i);
     if (!libres.length) continue;
+    /* Solo lo que le queda por delante en su recorrido actual. Sin esto se
+       ofrecían estaciones que el tren ya había pasado, alcanzables únicamente
+       tras invertir en cabecera y dar media vuelta: a un tren averiado entre
+       Las Rozas y Majadahonda le salía Alcalá a 170 minutos.           */
+    const porDelante = s2.dir === "alcala" ? i > s2.idx : i < s2.idx;
+    if (!porDelante) continue;
     const eta = etaEnSentido(t, g.reloj, i, s2.dir);
-    if (eta < MIN_ANTELACION || eta > 200) continue;
-    out.push({ idx: i, nombre: e.n, eta: Math.round(eta), vias: libres });
+    /* Sin margen mínimo de antelación. Ese margen existe para preparar el
+       itinerario de una rotación programada, pero ante una avería lo que
+       cuenta es despejar la vía cuanto antes: si el apartadero está a un
+       minuto, mejor todavía.                                            */
+    if (eta > 200) continue;
+    out.push({ idx: i, nombre: e.n, eta: Math.max(1, Math.round(eta)), vias: libres });
   }
   return out.sort((a2, b2) => a2.eta - b2.eta);
 }
@@ -1601,6 +2255,22 @@ function sortearGravedad(u, maq, tipo = null, reloj = null) {
   // por encima de 1 se agrava, por debajo se suaviza
   const f = Math.max(0.35, 1 + ((desg - 50) / 100) * 0.8 - ((con - 50) / 100) * 0.5);
   const noche = tipo && tipo.deNoche && reloj !== null && esDeNoche(reloj);
+
+  /* Cada avería puede declarar su propio reparto de grados: no todas se
+     comportan igual. El desgaste y el conocimiento del maquinista siguen
+     inclinándolo, así que una unidad castigada sigue rompiendo peor.  */
+  if (tipo && tipo.reparto) {
+    const p2 = {};
+    for (const [k, v] of Object.entries(tipo.reparto)) p2[k] = k === "leve" ? v / f : k === "habitual" ? v : v * f;
+    const t2 = Object.values(p2).reduce((n, v) => n + v, 0);
+    let y = Math.random() * t2;
+    for (const [k, v] of Object.entries(p2)) {
+      y -= v;
+      if (y <= 0) return k;
+    }
+    return Object.keys(tipo.reparto)[0];
+  }
+
   const pesos = {
     // hay averías que no admiten grado leve: el reparto se hace sin él
     leve: (tipo && tipo.sinLeve) || noche ? 0 : GRAVEDAD.leve.peso / f,
@@ -1660,6 +2330,57 @@ const retirada = (c, m = 3) => ({
 const AVERIAS_MATERIAL = [
   {
     id: "traccion", nombre: "Avería de tracción", p: 20, inmoviliza: true,
+    /* La pérdida de tracción va por convertidores: uno, dos, o todos. No tiene
+       grado habitual: perder un convertidor es leve, perder dos ya obliga a
+       sacar el tren del servicio, y perderlos todos lo deja clavado.    */
+    grados: ["leve", "grave", "muygrave"],
+    reparto: { leve: 70, grave: 25, muygrave: 5 },
+    leve: (c) => ({
+      texto: "El tren se queda sin un convertidor de tracción. Irá al 75 % de su capacidad de aceleración.",
+      opciones: [
+        {
+          label: "Continuar el servicio",
+          detalle: "Pierde tiempo de forma continuada, con un 5 % de que la avería vaya a más",
+          ef: { degradada: { i: c.i, min: 5, cada: 90, agrava: 0.05, tipo: "traccion" } },
+        },
+        ...opcionesCambio(c).filter((o) => !o.ef.cambioMaterial.conReserva),
+      ],
+    }),
+    grave: (c) => ({
+      texto: "El tren se queda sin dos de sus convertidores de tracción. Irá al 50 % de su capacidad de aceleración.",
+      opciones: [
+        {
+          label: "Continuar el servicio",
+          detalle: "Pierde tiempo de forma continuada, con un 5 % de que la avería vaya a más",
+          ef: { degradada: { i: c.i, min: 15, cada: 90, agrava: 0.05, tipo: "traccion" } },
+        },
+        ...opcionesCambio(c)
+          .filter((o) => !o.ef.cambioMaterial.conReserva)
+          .map((o) => ({ ...o, label: o.label.replace("Cambiar material", "Cambio de material") })),
+        {
+          label: "Terminar recorrido y apartar el material",
+          detalle: "Se elige dónde y en qué vía queda estacionado · se pierde la circulación",
+          ef: { averiaGrave: { i: c.i } },
+        },
+      ],
+    }),
+    muygrave: (c) => ({
+      texto: "Pérdida total de esfuerzo de tracción. El tren queda inútil donde está, sin capacidad de moverse por sus propios medios.",
+      opciones: [
+        {
+          label: "Enviar ATLs de urgencia y banalizar hasta la resolución",
+          detalle: "Los mecánicos tardan en llegar y no siempre lo resuelven; mientras, vía única en el tramo",
+          tiempo: [15, 25],
+          ef: { atls: { i: c.i } },
+        },
+        {
+          label: "Banalizar el tramo, realizar transbordo y enviar socorro",
+          detalle: "El pasaje transborda al primer tren del mismo sentido y se manda material a recogerlo",
+          tiempo: [25, 45],
+          ef: { rescate: { i: c.i } },
+        },
+      ],
+    }),
     gen: (c) => ({
       texto: "Pérdida de esfuerzo de tracción: el tren no puede mantener la marcha prevista.",
       opciones: [
@@ -1672,23 +2393,119 @@ const AVERIAS_MATERIAL = [
   },
   {
     id: "freno", nombre: "Avería de freno", p: 20, inmoviliza: true,
-    gen: (c) => ({
-      texto: "Fallo en el sistema de freno. El protocolo no permite mantener la velocidad máxima.",
+    /* Mismo esqueleto que la tracción: tres grados, marcha degradada mientras
+       se pueda circular, y rescate cuando el tren queda clavado.        */
+    grados: ["leve", "grave", "muygrave"],
+    reparto: { leve: 70, grave: 25, muygrave: 5 },
+    leve: (c) => ({
+      texto: "Un bogie del tren se queda enfrentado. Es necesario desahogarlo y anularlo. El tren, al no contar con todo su porcentaje de freno, tiene que reducir la velocidad.",
       opciones: [
-        desacople(c, 10),
-        ...opcionesCambio(c),
-        retirada(c, 5),
-        { label: "Continuar con marcha limitada", detalle: "Pierde tiempo en cada recorrido", ef: { limitacion: { i: c.i, m: 6 }, riesgo: { i: c.i, p: 0.15 } } },
+        {
+          label: "Continuar el servicio",
+          detalle: "Pierde tiempo de forma continuada, con un 5 % de que la avería vaya a más",
+          ef: { degradada: { i: c.i, min: 5, cada: 90, agrava: 0.05, tipo: "freno" } },
+        },
+        ...opcionesCambio(c).filter((o) => !o.ef.cambioMaterial.conReserva),
+      ],
+    }),
+    grave: (c) => ({
+      texto: "Avería del compresor principal de la unidad. El maquinista realiza un reset de batería del tren, pero desconoce si no volverá a producirse.",
+      opciones: [
+        {
+          label: "Continuar el servicio",
+          detalle: "Pierde tiempo de forma continuada, con un 5 % de que la avería vaya a más",
+          ef: { degradada: { i: c.i, min: 15, cada: 90, agrava: 0.05, tipo: "freno" } },
+        },
+        ...opcionesCambio(c)
+          .filter((o) => !o.ef.cambioMaterial.conReserva)
+          .map((o) => ({ ...o, label: o.label.replace("Cambiar material", "Cambio de material") })),
+        {
+          label: "Terminar recorrido y apartar el material",
+          detalle: "Se elige dónde y en qué vía queda estacionado · se pierde la circulación",
+          ef: { averiaGrave: { i: c.i } },
+        },
+      ],
+    }),
+    muygrave: (c) => ({
+      texto:
+        "El tren ha frenado de urgencia porque se ha activado el presostato de mínima. El compresor ha dejado de producir aire y es incapaz de levantar el freno. El maquinista no encuentra la solución y el tren se mantiene detenido.",
+      opciones: [
+        {
+          label: "Enviar ATLs de urgencia y banalizar hasta la resolución",
+          detalle: "Los mecánicos tardan en llegar y no siempre lo resuelven; mientras, vía única en el tramo",
+          tiempo: [15, 25],
+          ef: { atls: { i: c.i } },
+        },
+        {
+          label: "Banalizar el tramo, realizar transbordo y enviar socorro",
+          detalle: "El pasaje transborda al primer tren del mismo sentido y se manda material a recogerlo",
+          tiempo: [25, 45],
+          ef: { rescate: { i: c.i } },
+        },
       ],
     }),
   },
   {
+    /* Primera avería reformulada: cada grado trae su propio texto y sus
+       propias opciones, en vez de heredar las genéricas del grado. Una
+       climatización no puede inmovilizar un tren, así que no tiene grado
+       muy grave y nunca ofrece socorro.                                  */
     id: "clima", nombre: "Avería de climatización", p: 20,
-    leve: "Se comprueba que es solo un coche el que circula sin climatización. Se reubica a los viajeros de ese coche.",
-    gen: (c) => ({
-      texto: "La unidad se queda sin climatización y no puede prestar servicio con viajeros.",
-      opciones: [desacople(c, 6), ...opcionesCambio(c), retirada(c, 3)],
+    grados: ["leve", "grave"],
+    leve: (c) => ({
+      texto: "La climatización deja de funcionar en uno de los coches. El resto de la composición mantiene la temperatura.",
+      opciones: [
+        {
+          label: "Continuar el servicio",
+          detalle: "El maquinista lo anota en el libro de averías y sigue el trayecto",
+          tiempo: [1, 3],
+          ef: { retraso: { i: c.i, m: retrasoRango(1, 3, c.mq) } },
+        },
+        // solo el cambio de material, sin la variante que aprovecha para relevar
+        ...opcionesCambio(c).filter((o) => !o.ef.cambioMaterial.conReserva),
+      ],
     }),
+    /* Dos averías distintas comparten el grado grave, y se sortean al 50 %:
+       una afecta al pasaje y otra al maquinista.                        */
+    grave: (c) =>
+      Math.random() < 0.5
+        ? {
+            texto: "La climatización de la cabina deja de funcionar. El maquinista te llama para comunicarte que no se puede conducir con esas condiciones.",
+            opciones: [
+              ...opcionesCambio(c)
+                .filter((o) => !o.ef.cambioMaterial.conReserva)
+                .map((o) => ({
+                ...o,
+                detalle: `${o.detalle} · el maquinista puede negarse a continuar`,
+                // el cambio pasa por la conformidad del maquinista
+                ef: { cabinaCambio: { i: c.i, ...o.ef.cambioMaterial } },
+              })),
+              {
+                label: "El tren se queda inútil en la primera estación posible",
+                detalle: "Los viajeros bajan y el material queda apartado allí mismo",
+                ef: { averiaGrave: { i: c.i } },
+              },
+            ],
+          }
+        : {
+      texto: "La climatización deja de funcionar en toda la composición.",
+      opciones: [
+        /* Cambio de material: el jugador elige en qué estación, con el
+           transbordo de viajeros que ya estaba implementado.            */
+        ...opcionesCambio(c).filter((o) => !o.ef.cambioMaterial.conReserva),
+        {
+          label: "Continuar el resto del turno con el mismo material",
+          detalle: "Sin pérdida de tiempo, pero el viaje se hace muy incómodo y puede acabar en altercado",
+          ef: { retraso: { i: c.i, m: retrasoRango(1, 3, c.mq) }, calidad: -22, climaSinResolver: c.i },
+        },
+        {
+          label: "Suprimir el tren y continuar como material vacío",
+          detalle: "Los viajeros bajan en la próxima parada y el tren circula vacío hasta donde se aparte",
+          tiempo: [4, 9],
+          ef: { retraso: { i: c.i, m: retrasoRango(4, 9, c.mq) }, circularVacio: { i: c.i } },
+        },
+      ],
+          },
   },
   {
     id: "asfa", nombre: "Avería de ASFA", p: 5,
@@ -1887,7 +2704,7 @@ function trenPorFiabilidad(g) {
   const cand = g.trenes.filter((t) => t.estado !== "suprimido" && t.unidades.length);
   if (!cand.length) return null;
   const pesos = cand.map((t) => {
-    const mq = t.maq ? g.personal.find((x) => x.id === t.maq) : null;
+    const mq = t.maq ? maqDe(g, t) : null;
     return Math.pow(1 - fiabDe(t), 1.4) * factorAveria(mq);
   });
   const total = pesos.reduce((a, b) => a + b, 0);
@@ -1910,7 +2727,7 @@ const POOL = [
       const donde = ESTACIONES[Math.min(N - 1, Math.round(situacion(tr, g.reloj).idx))].n;
       const num = numeroTren(tr, g.reloj);
       const mq = tr.maq ? g.personal.find((x) => x.id === tr.maq) : null;
-      const ctx = { g, tr, u, doble, donde, num, i: tr.i };
+      const ctx = { g, tr, u, doble, donde, num, i: tr.i, mq: tr.maq ? g.personal.find((x) => x.id === tr.maq) : null };
       const tipo = sortearAveria();
 
       // un maquinista con conocimiento puede resolverla sobre la marcha
@@ -1919,12 +2736,51 @@ const POOL = [
         return null;
       }
 
-      const av = tipo.gen(ctx);
-      const grav = sortearGravedad(u, mq, tipo, g.reloj);
-      const cab = { leve: P.ok, habitual: P.warn, grave: P.alert, muygrave: P.alert }[grav];
-      const base = `${u.id} · desgaste ${Math.round(u.desgaste)} % · fiabilidad ${Math.round(u.fiab * 100)} %. ${av.texto} A la altura de ${donde}.`;
+      let grav = sortearGravedad(u, mq, tipo, g.reloj);
+      /* Si la avería declara qué grados puede tener, se respeta: una
+         climatización no inmoviliza un tren y no debe salir muy grave. */
+      if (tipo.grados && !tipo.grados.includes(grav)) {
+        /* Se reconduce al grado disponible más cercano hacia arriba, y si no
+           lo hay, hacia abajo: un "habitual" en una avería que no lo tiene
+           pasa a grave, no a leve.                                      */
+        const escala = ["leve", "habitual", "grave", "muygrave"];
+        const k = escala.indexOf(grav);
+        const arriba = escala.slice(k + 1).find((x) => tipo.grados.includes(x));
+        const abajo = escala.slice(0, k).reverse().find((x) => tipo.grados.includes(x));
+        grav = arriba || abajo || tipo.grados[0];
+      }
+      /* La ficha técnica va como dato aparte, no dentro del relato: son tres
+         valores que se consultan de un vistazo, no se leen.             */
+      const datos = [
+        { k: "Unidad", v: u.id },
+        { k: "Desgaste", v: `${Math.round(u.desgaste)} %`, c: colDesgaste(u.desgaste) },
+        { k: "Fiabilidad", v: `${Math.round(u.fiab * 100)} %`, c: u.fiab >= 0.95 ? P.ok : u.fiab >= 0.9 ? P.warn : P.alert },
+      ];
 
-      // el grado de la avería decide qué se puede hacer con el tren
+      /* Camino nuevo: la avería declara texto y opciones para cada grado. El
+         marco genérico de más abajo queda solo para las que aún no se han
+         reformulado, y esas sí tienen 'gen'.                             */
+      // queda anotada en el libro de la unidad, resuelta o no
+      if (!g.averiasTurno) g.averiasTurno = [];
+      g.averiasTurno.push({ id: u.id, tipo: tipo.id, nombre: tipo.nombre, grado: grav, m: Math.round(g.reloj), turno: g.turnoN, resuelta: false });
+
+      const propio = typeof tipo[grav] === "function" ? tipo[grav](ctx) : null;
+      if (propio) {
+        return {
+          titulo: `${tipo.nombre} en el ${num}`,
+          lugar: donde,
+          datos,
+          texto: propio.texto,
+          grav: grav === "leve" ? "leve" : grav === "muygrave" ? "critica" : "grave",
+          opciones: propio.opciones,
+        };
+      }
+
+      const av = tipo.gen ? tipo.gen(ctx) : null;
+      if (!av) return null;
+      const cab = { leve: P.ok, habitual: P.warn, grave: P.alert, muygrave: P.alert }[grav];
+      const base = av.texto;
+
       let opciones;
       if (grav === "leve") {
         opciones = [
@@ -1966,8 +2822,15 @@ const POOL = [
 
       return {
         titulo: `${tipo.nombre} en el ${num}`,
-        texto: `${base}\n\nGravedad ${GRAVEDAD[grav].n}: ${GRAVEDAD[grav].txt}`,
+        lugar: donde,
+        datos,
+        // sin repetir el grado: ya lo dice la cabecera de la tarjeta
+        texto: `${av.texto} ${GRAVEDAD[grav].txt}`,
         color: cab,
+        /* La avería trae su propio grado del sorteo, así que manda sobre el de
+           la familia: una climatización leve no es lo mismo que un freno que
+           deja el tren clavado en plena vía.                            */
+        grav: grav === "leve" ? "leve" : grav === "muygrave" ? "critica" : "grave",
         opciones: escalarOpciones(opciones, factorConsec(mq)),
       };
     },
@@ -1982,6 +2845,8 @@ const POOL = [
       const e = etaPrimeraCabecera(tr, g.reloj);
       return {
         titulo: `${m.nombre} se encuentra indispuesto`,
+        tren: tr.i,
+        lugar: `próxima cabecera: ${e.cab}`,
         texto: `El maquinista del ${numeroTren(tr, g.reloj)} no puede continuar. La primera cabecera es ${e.cab}, a ${Math.round(e.min)} minutos.`,
         opciones: [
           { label: `Relevo inmediato en ${e.cab}`, detalle: "Consume una reserva antes de lo previsto", ef: { relevoInmediato: tr.i, retirarMaq: m.id } },
@@ -1997,6 +2862,12 @@ const POOL = [
       const tr = tramoAlAzar(false);
       return {
         titulo: `Limitación de velocidad ${tr.txt}`,
+        lugar: tr.txt.replace(/^(entre|en) /, ""),
+        datos: [
+          { k: "Tramo", v: tr.txt.replace(/^(entre|en) /, "") },
+          { k: "Afecta a", v: "cada paso" },
+          { k: "Previsión", v: prevision(dur), c: P.warn },
+        ],
         texto: `Adif impone una LTV por el estado de la vía. Cada tren que atraviese el tramo pierde tiempo mientras dure. Se estima ${prevision(dur)} de afectación.`,
         opciones: [
           { label: "Mantener todas las circulaciones", detalle: "Se conserva la frecuencia, el retraso se acumula", ef: { restriccion: { idx: tr.idx, m: 4, dur: dur, txt: `LTV ${tr.txt}` } } },
@@ -2013,6 +2884,8 @@ const POOL = [
       const donde = ESTACIONES[Math.min(N - 1, Math.round(situacion(tr, g.reloj).idx))].n;
       return {
         titulo: `Viajero indispuesto en el ${numeroTren(tr, g.reloj)}`,
+        lugar: donde,
+        tren: tr.i,
         texto: `Se solicita asistencia sanitaria en ${donde}. El tren queda detenido en andén hasta la llegada del servicio médico.`,
         opciones: [
           { label: "Esperar a los servicios sanitarios", detalle: "Retraso propio y del que viene detrás", ef: { retraso: { i: tr.i, m: 11 } } },
@@ -2028,6 +2901,12 @@ const POOL = [
       const tr = tramoAlAzar(true);
       return {
         titulo: `Robo de cable ${tr.txt}`,
+        lugar: tr.txt.replace(/^(entre|en) /, ""),
+        datos: [
+          { k: "Tramo", v: tr.txt.replace(/^(entre|en) /, "") },
+          { k: "Señalización", v: "sin servicio", c: P.alert },
+          { k: "Previsión", v: prevision(dur), c: P.alert },
+        ],
         texto: "Sustracción de conductor de señalización. Sin protección, los trenes solo pueden circular con marcha a la vista por el tramo.",
         opciones: [
           { label: "Marcha a la vista en el tramo", detalle: `Todo tren que pase pierde tiempo · ${prevision(dur)}`, ef: { restriccion: { idx: tr.idx, m: 7, dur: dur, txt: `Marcha a la vista ${tr.txt}` }, afectLinea: 0.5 } },
@@ -2049,6 +2928,12 @@ const POOL = [
       const motivo = pick(["una incidencia en otra línea", "un evento multitudinario", "una avería en el Metro", "el corte de una línea de autobuses"]);
       return {
         titulo: `Aglomeración en ${ESTACIONES[donde].n}`,
+        lugar: ESTACIONES[donde].n,
+        datos: [
+          { k: "Estación", v: ESTACIONES[donde].corto },
+          { k: "En andén", v: nf(Math.round(g.andenes[donde].alcala + g.andenes[donde].pio)), c: P.warn },
+          { k: "Próximo tren", v: `${INTERVALO} min` },
+        ],
         texto: `${motivo.charAt(0).toUpperCase() + motivo.slice(1)} deriva viajeros hacia la C-7. El ${numeroTren(tr, g.reloj)} llega allí en ${Math.round(etaPunto(tr, g.reloj, donde))} min y no dará abasto con sus ${nf(plazasDe(tr))} plazas.`,
         opciones: [
           puede
@@ -2072,10 +2957,46 @@ const POOL = [
       const sitio = modo.tramo ? tramoAlAzar(false) : (() => { const i = pick(ESTACIONES.map((e, k) => (e.rot ? k : -1)).filter((k) => k >= 0)); return { idx: i, txt: `en ${ESTACIONES[i].n}` }; })();
       return {
         titulo: `${modo.t} ${sitio.txt}`,
+        lugar: sitio.txt.replace(/^(entre|en) /, ""),
+        datos: [
+          { k: "Punto", v: sitio.txt.replace(/^(entre|en) /, "") },
+          { k: "Instalación", v: "fuera de servicio", c: P.warn },
+          { k: "Previsión", v: prevision(dur), c: P.warn },
+        ],
         texto: `${modo.txt} Adif estima ${prevision(dur)} hasta el restablecimiento.`,
         opciones: [
           { label: "Circular con rebase autorizado", detalle: "Cada tren que pase pierde tiempo", ef: { restriccion: { idx: sitio.idx, m: modo.m, dur: dur, txt: `${modo.t} ${sitio.txt}`, bloqueaRot: !!modo.rot } } },
         ],
+      };
+    },
+  },
+  {
+    /* De la estación, no de la línea. Se elige preferentemente una que
+       compartan varias: es donde la decisión tiene peso de verdad.     */
+    id: "estacion",
+    gen: (g) => {
+      const conVarias = [];
+      const todas = [];
+      for (const e of ESTACIONES) {
+        if (e.puesto) continue;
+        const ls = lineasEnEstacion(g, e.n);
+        if (ls.length > 1) conVarias.push({ e, ls });
+        else if (ls.length === 1) todas.push({ e, ls });
+      }
+      const pool = conVarias.length && Math.random() < 0.8 ? conVarias : conVarias.concat(todas);
+      if (!pool.length) return null;
+      const { e, ls } = pick(pool);
+      const def = pick(INC_ESTACION);
+      const txtLineas = ls.length > 1 ? `${ls.slice(0, -1).join(", ")} y ${ls[ls.length - 1]}` : ls[0] || LINEA;
+      return {
+        titulo: `${def.txt} en ${e.n}`,
+        lugar: e.n,
+        texto: def.relato(e.n, txtLineas),
+        datos: [
+          { k: "Estación", v: e.n },
+          { k: "Líneas afectadas", v: txtLineas, c: ls.length > 1 ? COLOR.rojo : undefined },
+        ],
+        opciones: def.opciones(e.n, txtLineas),
       };
     },
   },
@@ -2090,6 +3011,8 @@ const POOL = [
       const doble = tr.unidades.length > 1;
       return {
         titulo: `Grafiteros en ${donde}`,
+        tren: tr.i,
+        lugar: donde,
         texto: `Un grupo acciona el freno de alarma del ${numeroTren(tr, g.reloj)} y pinta la ${u.id}. El tren queda detenido hasta que se restablece el freno.`,
         opciones: [
           doble
@@ -2115,6 +3038,8 @@ const POOL = [
       const durMedia = durIncid(110);
       return {
         titulo: `Enganchón de catenaria en ${e.n}`,
+        tren: tr.i,
+        lugar: e.n,
         texto: `El pantógrafo del ${numeroTren(tr, g.reloj)} engancha el hilo de contacto. La vía de ${via} queda inutilizada en el punto; la contraria sigue libre.`,
         opciones: [
           { label: "Circulación por la vía contraria hasta su reparación", detalle: `Vía única en el tramo · ${prevision(durLarga)}`, ef: { restriccion: { idx: i, m: 2, dur: durLarga, dir, txt: `Enganchón en ${e.corto}` } } },
@@ -2145,6 +3070,12 @@ const POOL = [
       const corto = ESTACIONES[sitio.idx].corto;
       return {
         titulo: `Avería de un ${clase} ${sitio.txt}`,
+        lugar: sitio.txt.replace(/^(entre|en) /, ""),
+        datos: [
+          { k: "Tramo", v: sitio.txt.replace(/^(entre|en) /, "") },
+          { k: "Tren ajeno", v: clase },
+          { k: "Previsión", v: prevision(dur), c: P.warn },
+        ],
         texto: `Un tren de ${clase} queda detenido por avería ocupando la vía de ${via}. Adif trabaja en apartarlo. Se estima ${prevision(dur)} de afectación.`,
         opciones: [
           {
@@ -2172,6 +3103,8 @@ const POOL = [
       const sub = tipo.gen({ g, tr, i: tr.i });
       return {
         titulo: `${tipo.nombre} en el ${numeroTren(tr, g.reloj)}`,
+        lugar: donde,
+        tren: tr.i,
         texto: `${sub.texto} A la altura de ${donde}.`,
         opciones: sub.opciones,
       };
@@ -2185,6 +3118,12 @@ const POOL = [
       const e = ESTACIONES[i];
       return {
         titulo: `Arrollamiento en ${e.n}`,
+        lugar: e.n,
+        datos: [
+          { k: "Punto", v: e.n },
+          { k: "Vía", v: "ambos sentidos" },
+          { k: "Previsión", v: prevision(dur), c: P.alert },
+        ],
         texto: "Circulación interrumpida por causa ajena a la explotación. Intervención judicial sin previsión de restablecimiento.",
         opciones: [
           { label: "Mantener el corte hasta el levantamiento", detalle: `Todo tren que llegue al punto queda retenido · ${prevision(dur)}`, ef: { restriccion: { idx: i, m: 16, dur: dur, txt: `Corte en ${e.corto}` }, afectLinea: 1 } },
@@ -2219,14 +3158,376 @@ const TABLA = [
   { id: "arrollamiento", valle: 2, punta: 2 },
   { id: "afluencia", valle: 1, punta: 4 },
   { id: "graffiteros", valle: 2, punta: 0 },
+  // incidencias de la propia estación: no son de ninguna línea, son de todas
+  { id: "estacion", valle: 5, punta: 7 },
 ];
 
-// FRECUENCIA, independiente del reparto anterior: probabilidad de que un
-// sorteo (uno por hora) produzca alguna incidencia. Pendiente de definir.
+/* FRECUENCIA. La base es la probabilidad de que un sorteo por hora produzca
+   alguna incidencia. Solo la parte de material se ajusta al estado real de la
+   flota: con el parque impecable ocurren menos averías, y con el parque
+   agotado bastantes más. El resto de familias —vía, viajeros, orden público—
+   no dependen de cómo esté el material y mantienen su frecuencia.      */
 const PROB_INCIDENCIA = 0.6;
 
-function sortearIncidencia(reloj) {
-  if (Math.random() > PROB_INCIDENCIA) return null; // hora sin novedad
+// cuánto de esa probabilidad corresponde a averías de material
+const PESO_MATERIAL = 0.38;
+
+function probIncidencia(g) {
+  const enServicio = g.trenes.filter((t) => t.estado !== "suprimido" && t.unidades.length);
+  if (!enServicio.length) return PROB_INCIDENCIA;
+  const unidades = enServicio.flatMap((t) => t.unidades);
+  const desg = unidades.reduce((n, u) => n + u.desgaste, 0) / unidades.length;
+  /* Factor sobre la parte de material: 0,55 con la flota nueva y 1,7 con el
+     ciclo agotado. Fuera de ese tramo no se sigue moviendo.            */
+  const f = Math.max(0.55, Math.min(1.7, 0.55 + (desg / DESGASTE_MAX) * 1.15));
+  return PROB_INCIDENCIA * (1 - PESO_MATERIAL) + PROB_INCIDENCIA * PESO_MATERIAL * f;
+}
+
+/* Gravedad por familia. Se declara y no se deduce de los efectos: el jugador
+   tiene que saber lo que tiene encima ANTES de elegir opción, y varias
+   incidencias son leves o graves según lo que decida.
+
+   leve     cuesta minutos a un tren y se resuelve donde está
+   grave    afecta a la línea: vía única, restricción o tren fuera de servicio
+   crítica  corta el servicio o inmoviliza material en plena vía          */
+// nombre legible de cada familia, para el panel de pruebas
+const NOMBRE_FAMILIA = {
+  averia: "Avería de material",
+  instalaciones: "Avería de instalaciones",
+  orden: "Alteración del orden público",
+  catenaria: "Enganchón de catenaria",
+  ltv: "Limitación temporal de velocidad",
+  viajero: "Viajero indispuesto",
+  otrotren: "Avería de otro tren",
+  indispuesto: "Maquinista indispuesto",
+  cable: "Robo de cable",
+  arrollamiento: "Arrollamiento",
+  afluencia: "Aglomeración",
+  graffiteros: "Grafiteros",
+};
+
+/* Incidencias de la ESTACIÓN. No nacen en una línea y se contagian: nacen ya
+   de todas las que paran allí, y la decisión que tomes las gobierna a todas a
+   la vez. Es la diferencia entre gestionar una línea y gestionar un nudo. */
+const INC_ESTACION = [
+  {
+    txt: "Fallo de señalización",
+    relato: (e, ls) =>
+      `Se ha quedado sin señales el enclavamiento de ${e}. Hasta que el técnico lo restablezca, los trenes tienen que entrar con marcha a la vista y autorización expresa.\n\nAfecta a ${ls}.`,
+    opciones: (e, ls) => [
+      { label: "Marcha a la vista mientras se resuelve", detalle: "Todos los trenes pierden tiempo al pasar · se mantiene el servicio", ef: { cortarEstacion: { estacion: e, m: 4, dur: 50 + Math.floor(Math.random() * 40), txt: "Fallo de señalización" } } },
+      { label: "Cortar el paso hasta el restablecimiento", detalle: "Penalización mayor pero más corta · el técnico trabaja sin trenes encima", ef: { cortarEstacion: { estacion: e, m: 9, dur: 25 + Math.floor(Math.random() * 20), txt: "Enclavamiento fuera de servicio" }, afectLinea: 0.1 } },
+    ],
+  },
+  {
+    txt: "Persona en la vía",
+    relato: (e, ls) =>
+      `Avisan de una persona caminando por la vía en ${e}. Hasta que Seguridad confirme que la zona está despejada no se puede circular con normalidad.\n\nAfecta a ${ls}.`,
+    opciones: (e, ls) => [
+      { label: "Cortar la circulación hasta que se despeje", detalle: "Lo más seguro · el servicio se detiene en esa estación", ef: { cortarEstacion: { estacion: e, m: 12, dur: 20 + Math.floor(Math.random() * 25), txt: "Persona en la vía" }, afectLinea: 0.15 } },
+      { label: "Marcha a la vista y aviso a los maquinistas", detalle: "Se mantiene el servicio · la responsabilidad de circular con alguien en la vía es tuya", ef: { cortarEstacion: { estacion: e, m: 5, dur: 35 + Math.floor(Math.random() * 30), txt: "Persona en la vía" }, calidad: -6 } },
+    ],
+  },
+  {
+    txt: "Aglomeración en el vestíbulo",
+    relato: (e, ls) =>
+      `El vestíbulo de ${e} está desbordado. Los andenes no admiten más gente y Seguridad pide regular el acceso antes de que haya un disgusto.\n\nAfecta a ${ls}.`,
+    opciones: (e, ls) => [
+      { label: "Regular el acceso a los andenes", detalle: "Se controla la entrada · los trenes paran más tiempo", ef: { cortarEstacion: { estacion: e, m: 3, dur: 40 + Math.floor(Math.random() * 30), txt: "Acceso regulado" } } },
+      { label: "No intervenir", detalle: "Sin pérdida de tiempo, pero la gente se agolpa en el andén", ef: { afectAnden: null, calidad: -14 } },
+    ],
+  },
+  {
+    txt: "Paquete sospechoso",
+    relato: (e, ls) =>
+      `Han localizado un bulto abandonado en el andén de ${e}. El protocolo obliga a acordonar la zona hasta que lo revisen.\n\nAfecta a ${ls}.`,
+    opciones: (e, ls) => [
+      { label: "Acordonar y avisar a los artificieros", detalle: "Corte largo, pero es lo que marca el protocolo", ef: { cortarEstacion: { estacion: e, m: 15, dur: 30 + Math.floor(Math.random() * 30), txt: "Paquete sospechoso" }, afectLinea: 0.2 } },
+      { label: "Que lo revise el personal de estación", detalle: "Más rápido, saltándose el protocolo", ef: { cortarEstacion: { estacion: e, m: 4, dur: 12 + Math.floor(Math.random() * 12), txt: "Bulto abandonado" }, coste: 2000 } },
+    ],
+  },
+];
+
+const GRAVEDAD_FAMILIA = {
+  averia: "grave", // se afina según la gravedad sorteada
+  instalaciones: "grave",
+  orden: "leve",
+  catenaria: "grave",
+  ltv: "grave",
+  viajero: "leve",
+  otrotren: "grave",
+  indispuesto: "leve",
+  cable: "critica",
+  arrollamiento: "critica",
+  afluencia: "leve",
+  graffiteros: "leve",
+  estacion: "grave",
+};
+
+/* ── retraso por horquilla ──────────────────────────────────────
+   Una avería nunca tarda lo mismo en resolverse, así que cada decisión anuncia
+   un margen y no una cifra exacta. Dentro de ese margen manda la
+   PROFESIONALIDAD del maquinista: con 100 el resultado se acerca al mínimo y
+   con 0 al máximo. Es el primer uso real de ese atributo, que hasta ahora solo
+   se mostraba.                                                            */
+function retrasoRango(min, max, maq) {
+  const pro = maq && Number.isFinite(maq.pro) ? maq.pro : 50;
+  // la parte del margen que se consume: 0 con profesionalidad plena, 1 sin ella
+  const base = 1 - pro / 100;
+  // algo de azar para que dos averías iguales no salgan clavadas
+  const f = Math.max(0, Math.min(1, base + (Math.random() - 0.5) * 0.3));
+  return Math.round((min + (max - min) * f) * 10) / 10;
+}
+
+// texto del margen tal como se anuncia en la opción
+
+/* Previsión de tiempo de cada opción, para que el jugador sepa a qué atenerse
+   antes de decidir. Si la opción no declara su horquilla, se deduce del propio
+   efecto: un margen del 30 % alrededor del retraso que provoca.          */
+function previsionOpcion(o) {
+  if (!o || !o.ef) return null;
+  if (o.tiempo) return o.tiempo[0] === o.tiempo[1] ? `${o.tiempo[0]} min` : `${o.tiempo[0]}–${o.tiempo[1]} min`;
+  const ef = o.ef;
+  // la marcha degradada no cuesta una vez, cuesta cada tantos minutos
+  if (ef.degradada) return `${ef.degradada.min} min cada ${ef.degradada.cada}`;
+  if (ef.suprimir !== undefined || ef.averiaGrave) return "pierde la circulación";
+  if (ef.circularVacio) return "pierde la circulación";
+  if (ef.restriccion && ef.restriccion.dur) return `${Math.round(ef.restriccion.dur / 15) * 15} min de afectación`;
+  if (ef.corteVia) return "vía cortada";
+  if (ef.socorro) return `${SOCORRO_MIN} min de maniobra`;
+  if (ef.cambioMaterial || ef.cabinaCambio) return "cambio de material";
+  if (ef.relevoInmediato || ef.relevaReserva || ef.adelantar) return "consume una reserva";
+  if (ef.autorizar) return "sin retraso";
+  if (ef.reforzar) return "refuerzo";
+  if (ef.esperarCabecera) return "espera en la entrada";
+  if (ef.ordenarRotacion) {
+    const c2 = ef.ordenarRotacion.c || {};
+    return c2.ahorro ? `recupera ${Math.round(c2.ahorro)} min` : "rotación anticipada";
+  }
+  if (ef.abortarRotacion) return "vuelve al servicio";
+  if (ef.moverApartado || ef.destinoVacio) return "movimiento en vacío";
+  if (ef.retener) return "espera en la entrada";
+  const m = ef.retraso ? ef.retraso.m : ef.limitacion ? ef.limitacion.m : null;
+  if (m === null || m === undefined) return null;
+  const lo = Math.max(1, Math.floor(m * 0.7));
+  const hi = Math.ceil(m * 1.3);
+  return lo === hi ? `${lo} min` : `${lo}–${hi} min`;
+}
+
+/* Subtítulo de la tarjeta: los datos que sitúan la incidencia. Las averías de
+   material traen los suyos, y el resto se construyen aquí a partir del tren
+   afectado, para que ninguna tarjeta se quede sin esa línea.             */
+/* A qué líneas afecta una incidencia. La suya siempre; y si corta la vía en
+   una estación por la que pasan otras, también a ellas: un corte en Chamartín
+   no es asunto de una sola línea.                                       */
+/* Traslada una restricción a las demás líneas que pasan por ese punto. El
+   mismo andén tiene distinto número en cada línea, así que se busca por nombre
+   de estación y se crea la restricción en el índice que le corresponda allí.
+
+   No se traslada la vía única: la geometría de vías es propia de cada línea y
+   un corte en las vías de la C-7 no obliga a banalizar las de la C-1. Lo que
+   sí se traslada es la penalización de paso, que es lo que de verdad sufre
+   quien cruza una estación con un problema encima.                     */
+/* Retira de las demás líneas las restricciones que nacieron de estas. Si no,
+   la C-1 seguía penalizada en Chamartín después de resolverse la avería de la
+   C-7 que lo había provocado.                                          */
+function levantarEnTodas(g, ids) {
+  if (!ids || !ids.length) return;
+  const fuera = new Set(ids);
+  for (const trozo of Object.values(g.porLinea || {}))
+    if (trozo.restricciones) trozo.restricciones = trozo.restricciones.filter((x) => !fuera.has(x.origen));
+}
+
+/* Corta una estación para TODAS las líneas que paran en ella. A diferencia de
+   propagarRestriccion, que traslada a las demás algo nacido en una, esto no
+   pertenece a ninguna: un fallo de señalización o una persona en la vía son de
+   la estación, y quien pase por allí lo sufre igual.                   */
+function cortarEstacion(g, nombre, m, dur, txt) {
+  const id = `e${Math.round(g.reloj)}-${nombre}`;
+  const activa = g.linea || LINEAS_EN_JUEGO[0];
+  for (const idLin of Object.keys(g.porLinea || { [activa]: 1 })) {
+    const ests = (LINEAS[idLin] || {}).estaciones || ESTACIONES;
+    const idx = ests.findIndex((e) => e.n === nombre);
+    if (idx < 0) continue;
+    const nueva = { id, idx, m, hasta: g.reloj + dur, txt, dir: null, tramo: null, bloqueaRot: false, deEstacion: nombre };
+    if (idLin === activa) {
+      g.restricciones = [...g.restricciones.filter((x) => x.id !== id), nueva];
+    } else {
+      const trozo = g.porLinea[idLin];
+      trozo.restricciones = [...(trozo.restricciones || []).filter((x) => x.id !== id), nueva];
+    }
+  }
+  return id;
+}
+
+/* Líneas en juego que paran en una estación. Sirve para redactar el aviso y
+   para saber a cuántas afecta antes de lanzarlo.                        */
+function lineasEnEstacion(g, nombre) {
+  return Object.keys(g.porLinea || {}).filter((id) => ((LINEAS[id] || {}).estaciones || []).some((e) => e.n === nombre));
+}
+
+function propagarRestriccion(g, rest, nombreEstacion) {
+  const origen = g.linea || LINEAS_EN_JUEGO[0];
+
+  /* Estaciones alcanzadas: el punto donde ocurre y TODAS las del tramo que
+     queda cortado. Un tren muerto a la salida de Chamartín corta el tramo
+     entero, y quien pase por cualquiera de sus estaciones lo sufre, aunque el
+     punto exacto no sea el suyo. Antes solo se miraba el punto y la otra línea
+     no se enteraba de nada.                                             */
+  const tocadas = new Set();
+  if (nombreEstacion) tocadas.add(nombreEstacion);
+  if (rest.tramo) {
+    for (let k = rest.tramo.a; k <= rest.tramo.b; k++) if (ESTACIONES[k]) tocadas.add(ESTACIONES[k].n);
+  }
+  if (!tocadas.size) return;
+
+  for (const id of Object.keys(g.porLinea || {})) {
+    if (id === origen) continue;
+    const ests = (LINEAS[id] || {}).estaciones || [];
+    const idx = ests.findIndex((e) => tocadas.has(e.n));
+    if (idx < 0) continue;
+    const trozo = g.porLinea[id];
+    const yaEsta = (trozo.restricciones || []).some((x) => x.origen === rest.id);
+    if (yaEsta) continue;
+    trozo.restricciones = [
+      ...(trozo.restricciones || []),
+      { idx, m: rest.m, hasta: rest.hasta, txt: rest.txt, dir: null, tramo: null, bloqueaRot: !!rest.bloqueaRot, origen: rest.id, deLinea: origen },
+    ];
+  }
+}
+
+function lineasAfectadas(g, inc) {
+  const propia = inc.linea || g.linea || LINEAS_EN_JUEGO[0];
+  if (!inc.lugar) return [propia];
+
+  /* Solo alcanza a otras líneas lo que toca la INFRAESTRUCTURA: un corte de
+     vía, una limitación, un tren clavado. Lo que afecta a un tren o a su
+     maquinista —un relevo comprometido, una avería que se resuelve sola— es
+     asunto de su línea, aunque ocurra en una estación compartida.      */
+  const tocaVia = (inc.opciones || []).some(
+    (o) => o.ef && (o.ef.restriccion || o.ef.corteVia || o.ef.atls || o.ef.rescate || o.ef.averiaGrave || o.ef.socorro || o.ef.limitacion)
+  );
+  if (!tocaVia) return [propia];
+
+  const fuera = [];
+  for (const id of Object.keys(g.porLinea || {})) {
+    if (id === propia) continue;
+    // la estación tiene que ser la misma, no que un nombre contenga al otro
+    const comparte = (LINEAS[id].estaciones || []).some((e) => inc.lugar === e.n || inc.lugar === e.corto || inc.lugar.split(" y ").includes(e.n));
+    if (comparte) fuera.push(id);
+  }
+  return [propia, ...fuera];
+}
+
+function datosDeTren(g, t) {
+  if (!t) return null;
+  const aBordo = Math.round(t.pax.reduce((a, b) => a + b, 0));
+  const cap = plazasDe(t) || 1;
+  const oc = Math.round((aBordo / cap) * 100);
+  return [
+    { k: "Circulación", v: String(t.i) },
+    { k: "Material", v: t.unidades.map((u) => u.id).join(" + ") || "sin material" },
+    { k: "Ocupación", v: `${oc} %`, c: colOcupacion(oc) },
+  ];
+}
+
+/* Una avería que no se resuelve puede ir a más. Se vuelve a construir la misma
+   avería en el grado siguiente, con su texto y sus opciones.             */
+function avanceAveria(g, t, idTipo) {
+  const tipo = AVERIAS_MATERIAL.find((a) => a.id === idTipo);
+  const u = t.unidades[0];
+  const mq = t.maq ? maqDe(g, t) : null;
+  const donde = ESTACIONES[Math.max(0, Math.min(N - 1, Math.round(situacion(t, g.reloj).idx)))].n;
+  const ctx = { g, tr: t, u, doble: t.unidades.length > 1, donde, num: numeroTren(t, g.reloj), i: t.i, mq };
+  const orden = tipo && tipo.grados ? tipo.grados : ["leve", "habitual", "grave", "muygrave"];
+  const actual = orden.indexOf(t.degradaGrado || "leve");
+  const grav = orden[Math.min(orden.length - 1, actual + 1)];
+  const propio = tipo && typeof tipo[grav] === "function" ? tipo[grav](ctx) : null;
+  t.degradaGrado = grav;
+  return {
+    tipo: "inc",
+    grav: grav === "leve" ? "leve" : grav === "muygrave" ? "critica" : "grave",
+    tren: t.i,
+    lugar: donde,
+    titulo: `${tipo ? tipo.nombre : "Avería"} en el ${numeroTren(t, g.reloj)}`,
+    datos: [
+      { k: "Unidad", v: u.id },
+      { k: "Desgaste", v: `${Math.round(u.desgaste)} %`, c: colDesgaste(u.desgaste) },
+      { k: "Fiabilidad", v: `${Math.round(u.fiab * 100)} %`, c: u.fiab < 0.9 ? P.alert : colDesgaste(100 - u.fiab * 100) },
+    ],
+    texto: propio ? propio.texto : "La avería se agrava y el tren no puede mantener la marcha.",
+    opciones: propio ? propio.opciones : [{ label: "Terminar recorrido y apartar el material", detalle: "El tren llega a la primera estación con apartadero", ef: { averiaGrave: { i: t.i } } }],
+  };
+}
+
+/* ── modo de pruebas ────────────────────────────────────────────
+   Permite lanzar cualquier incidencia con el grado que se quiera, para poder
+   ver casos que de forma natural aparecen una vez cada muchos turnos. Todo
+   ocurre de verdad dentro del turno —vía única, transbordos, rescates— pero
+   el turno no se guarda ni toca la campaña.                             */
+function lanzarPrueba(g, idFamilia, idAveria, grado, iTren) {
+  const t = g.trenes.find((x) => x.i === iTren) || g.trenes.find((x) => x.estado !== "suprimido" && x.unidades.length);
+  if (!t) return null;
+
+  if (idFamilia !== "averia") {
+    const def = POOL.find((d) => d.id === idFamilia);
+    const inc = def && def.gen(g);
+    if (!inc) return null;
+    const datos = inc.datos || (inc.tren !== undefined ? datosDeTren(g, g.trenes.find((x) => x.i === inc.tren)) : null);
+    return { tipo: "inc", grav: GRAVEDAD_FAMILIA[idFamilia] || "grave", ...inc, datos };
+  }
+
+  // avería de material: se construye con el tipo y el grado pedidos
+  const tipo = AVERIAS_MATERIAL.find((a) => a.id === idAveria) || AVERIAS_MATERIAL[0];
+  const u = t.unidades[0];
+  const mq = t.maq ? maqDe(g, t) : null;
+  const donde = ESTACIONES[Math.max(0, Math.min(N - 1, Math.round(situacion(t, g.reloj).idx)))].n;
+  const num = numeroTren(t, g.reloj);
+  const ctx = { g, tr: t, u, doble: t.unidades.length > 1, donde, num, i: t.i, mq };
+  let grav = grado;
+  if (tipo.grados && !tipo.grados.includes(grav)) grav = tipo.grados[tipo.grados.length - 1];
+
+  const datos = [
+    { k: "Unidad", v: u.id },
+    { k: "Desgaste", v: `${Math.round(u.desgaste)} %`, c: colDesgaste(u.desgaste) },
+    { k: "Fiabilidad", v: `${Math.round(u.fiab * 100)} %`, c: u.fiab < 0.9 ? P.alert : P.ok },
+  ];
+  const propio = typeof tipo[grav] === "function" ? tipo[grav](ctx) : null;
+  if (propio)
+    return {
+      tipo: "inc",
+      grav: grav === "leve" ? "leve" : grav === "muygrave" ? "critica" : "grave",
+      tren: t.i,
+      lugar: donde,
+      datos,
+      titulo: `${tipo.nombre} en el ${num}`,
+      texto: propio.texto,
+      opciones: propio.opciones,
+    };
+
+  // las que aún no se han reformulado usan el marco genérico
+  const av = tipo.gen ? tipo.gen(ctx) : null;
+  if (!av) return null;
+  const opciones = grav === "muygrave" && tipo.inmoviliza
+    ? [
+        { label: "Pedir socorro al tren de detrás", detalle: `${SOCORRO_MIN} min de maniobra`, ef: { socorro: { i: t.i } } },
+        { label: "Cortar la vía y banalizar", detalle: "El material queda donde está", ef: { corteVia: { i: t.i } } },
+      ]
+    : av.opciones;
+  return {
+    tipo: "inc",
+    grav: grav === "leve" ? "leve" : grav === "muygrave" ? "critica" : "grave",
+    tren: t.i,
+    lugar: donde,
+    datos,
+    titulo: `${tipo.nombre} en el ${num}`,
+    texto: `${av.texto} ${GRAVEDAD[grav].txt}`,
+    opciones,
+  };
+}
+
+function sortearIncidencia(reloj, g) {
+  if (Math.random() > (g ? probIncidencia(g) : PROB_INCIDENCIA)) return null; // hora sin novedad
   const p = enPunta(reloj) ? "punta" : "valle";
   const total = TABLA.reduce((n, f) => n + f[p], 0);
   let x = Math.random() * total;
@@ -2243,13 +3544,19 @@ function sortearIncidencia(reloj) {
 const cubreTurno = (u) => u.desgaste + desgastePorTurno(u) <= DESGASTE_MAX;
 
 // al abrir el turno solo se puede dejar material apartado en estas tres
-const APART_INICIAL = [IDX_PIO, IDX_CHAMARTIN, IDX_ALCALA];
+// dónde se puede dejar material apartado al abrir el turno: las cabeceras de
+// la línea, y Chamartín aparte si es una parada intermedia
+let APART_INICIAL = [IDX_PIO, IDX_CHAMARTIN, IDX_ALCALA];
 const clave = (i, via) => `${i}|${via}`;
 
 /* Propuesta del taller. En campaña hay que mirar el desgaste heredado, no el
    del catálogo, y descartar lo que está en revisión o averiado: si no,
    propondría material que no existe o que está hecho polvo.               */
-function propuestaTaller(camp) {
+/* Propone material para la línea vigente. 'ocupadas' son las unidades que ya
+   ha tomado otra línea: sin ese dato, cada pestaña proponía la mejor flota
+   disponible y acababan repartiéndose las mismas unidades.            */
+function propuestaTaller(camp, ocupadas) {
+  const tomadas = ocupadas || new Set();
   const enTaller = new Set(Object.keys((camp && camp.taller) || {}));
   const averiadas = new Set((camp && camp.averiadas) || []);
 
@@ -2260,7 +3567,10 @@ function propuestaTaller(camp) {
   };
 
   const orden = (u) => DESGASTE_MAX - u.desgaste; // primero las más descansadas
-  const aptas = LIBRES_C7.filter((u) => !enTaller.has(u.id) && !averiadas.has(u.id))
+  /* Solo el material que admite la línea vigente: la C-1 se cubre con Civia en
+     composición sencilla, así que ni 446 ni 450 ni acoplamientos.      */
+  const serieOk = (LINEAS[LINEA] || {}).series || ["446", "465", "450"];
+  const aptas = LIBRES_C7.filter((u) => !enTaller.has(u.id) && !averiadas.has(u.id) && !tomadas.has(u.id) && serieOk.includes(u.serie))
     .map(conDesgaste)
     .filter(cubreTurno);
   const libres = { 450: [], 465: [], 446: [] };
@@ -2273,7 +3583,14 @@ function propuestaTaller(camp) {
   const demanda = demandaPorTren();
   const cands = [];
   for (const u of libres[450]) cands.push({ ids: [u.id], plazas: u.plazas, desg: u.desgaste, serie: "450" });
-  for (const se of ["465", "446"]) {
+
+  /* Una línea que no admite acoplamiento se cubre con unidades sueltas. */
+  if (!(LINEAS[LINEA] || {}).dobles) {
+    for (const se of ["465", "446"]) for (const u of libres[se]) cands.push({ ids: [u.id], plazas: u.plazas, desg: u.desgaste, serie: se });
+  }
+
+  const pares = (LINEAS[LINEA] || {}).dobles === false ? [] : ["465", "446"];
+  for (const se of pares) {
     const l = libres[se];
     for (let i = 0; i + 1 < l.length; i += 2)
       cands.push({
@@ -2304,14 +3621,27 @@ function propuestaTaller(camp) {
   // y deja una composición apartada en cada cabecera, por si hay que cambiar
   // material durante el turno. Príncipe Pío solo admite la serie 446.
   const apart = {};
-  for (const idx of APART_INICIAL) for (const v of ESTACIONES[idx].apartVias) apart[clave(idx, v)] = [null, null];
+  /* El apartado se indexa por NOMBRE de estación, igual que en la pantalla de
+     asignación: una misma vía tiene distinto número en cada línea.     */
+  for (const idx of APART_INICIAL) for (const v of ESTACIONES[idx].apartVias) apart[clave(ESTACIONES[idx].n, v)] = [null, null];
   for (const idx of APART_INICIAL) {
     const est = ESTACIONES[idx];
     const via = est.apartVias[0];
-    const admite = (u) => !est.apartSeries || est.apartSeries.includes(u.serie);
+    const admite = (u) => (!est.apartSeries || est.apartSeries.includes(u.serie)) && serieOk.includes(u.serie);
     let par = null;
     if (resto[450].length - a >= 1 && admite(resto[450][a])) par = [resto[450][a++].id, null];
-    else
+    else if (!(LINEAS[LINEA] || {}).dobles) {
+      // sin acoplamiento se aparta una unidad suelta
+      for (const se of serieOk) {
+        const k = se === "465" ? b : c;
+        if (resto[se] && resto[se].length - k >= 1 && admite(resto[se][k])) {
+          par = [resto[se][k].id, null];
+          if (se === "465") b += 1;
+          else c += 1;
+          break;
+        }
+      }
+    } else
       for (const se of ["465", "446"]) {
         const k = se === "465" ? b : c;
         if (resto[se].length - k >= 2 && admite(resto[se][k])) {
@@ -2321,14 +3651,15 @@ function propuestaTaller(camp) {
           break;
         }
       }
-    if (par) apart[clave(idx, via)] = par;
+    if (par) apart[clave(est.n, via)] = par;
   }
   return { slots, apart };
 }
 
 function initAsignacion() {
   const apart = {};
-  for (const i of APART_INICIAL) for (const v of ESTACIONES[i].apartVias) apart[clave(i, v)] = [null, null];
+  // por nombre, para que valga en cualquier línea
+  for (const i of APART_INICIAL) for (const v of ESTACIONES[i].apartVias) apart[clave(ESTACIONES[i].n, v)] = [null, null];
   return { fase: "asignacion", slots: Array.from({ length: CIRCULACIONES }, () => [null, null]), apart };
 }
 
@@ -2354,7 +3685,11 @@ async function guardarCampana(c) {
 async function cargarCampana() {
   try {
     const v = localStorage.getItem(CLAVE_CAMPANA);
-    return v ? JSON.parse(v) : null;
+    if (!v) return null;
+    const c = JSON.parse(v);
+    // una campaña empezada antes del histórico no lo tiene: se crea vacío
+    if (c && !c.historico) c.historico = [];
+    return c;
   } catch (e) {
     return null;
   }
@@ -2381,6 +3716,15 @@ function guardarPartida(g, modo, tab) {
    el parte final salía con los datos en blanco.                          */
 function completarPartida(g) {
   if (!g) return null;
+  /* Una partida guardada antes de que hubiera varias líneas no tiene su
+     estructura: se le da la de una sola, la que estuviera en juego.    */
+  if (!g.linea) g.linea = LINEAS_EN_JUEGO[0];
+  LINEAS_EN_JUEGO = g.porLinea ? Object.keys(g.porLinea) : [g.linea];
+  fijarLinea(g.linea);
+  if (!g.porLinea) {
+    g.porLinea = {};
+    guardarLinea(g, g.linea);
+  }
   g.kpi = { ...KPI_INICIAL, ...(g.kpi || {}) };
   for (const k of Object.keys(KPI_INICIAL)) if (typeof g.kpi[k] !== "number" || Number.isNaN(g.kpi[k])) g.kpi[k] = KPI_INICIAL[k];
   g.trenes = (g.trenes || []).map((t) => ({
@@ -2389,6 +3733,7 @@ function completarPartida(g) {
     hist: t.hist || [],
     marchas: t.marchas || [],
     cuadroRelevos: t.cuadroRelevos || [],
+    traza: t.traza || [],
     acum: t.acum || { paradas: 0, bloqueo: 0, maquinista: 0 },
     retraso: Number.isFinite(t.retraso) ? t.retraso : 0,
     carteristas: !!t.carteristas,
@@ -2432,6 +3777,11 @@ const campanaNueva = () => ({
   turno: "manana",
   desg: {},
   averiadas: [],
+  historico: [], // una ficha por turno cerrado, para la pantalla de análisis
+  /* Libro de averías por unidad: qué le pasó, cuándo, y si sigue sin
+     resolver. Es lo que hace que arrastrar una avería tenga consecuencias
+     más allá del turno en curso.                                        */
+  libro: {},
   taller: {},
   apartado: {},
   slots: null,
@@ -2481,7 +3831,9 @@ function estadoTrasTurno(g, camp) {
   for (const t of g.trenes) for (const u of t.unidades) desg[u.id] = u.desgaste;
   for (const lista of Object.values(g.apartado || {})) for (const x of lista) for (const u of x.unidades) desg[u.id] = u.desgaste;
 
-  const averiadas = [...new Set([...camp.averiadas, ...Object.values(g.apartado || {}).flat().filter((x) => x.averiado).flatMap((x) => x.unidades.map((u) => u.id))])];
+  const averiadas = [...new Set([...camp.averiadas, ...Object.values(g.apartado || {}).flat().filter((x) => x.averiado).flatMap((x) => x.unidades.map((u) => u.id))])].filter(
+    (id) => !(g.reparadas || []).includes(id)
+  );
 
   // avanza el trabajo de taller y saca lo que ya está listo
   const taller = {};
@@ -2495,9 +3847,21 @@ function estadoTrasTurno(g, camp) {
     }
   }
 
+  /* El apartado se hereda por NOMBRE de estación y recogiendo el de TODAS las
+     líneas. Guardado por índice, al abrir el turno siguiente esos números
+     apuntaban a otras estaciones —o a ninguna— en cuanto había más de una
+     línea en juego, y el arranque fallaba.                             */
   const apartado = {};
-  for (const [idx, lista] of Object.entries(g.apartado || {}))
-    apartado[idx] = lista.filter((x) => x.unidades.length).map((x) => ({ via: x.via, ids: x.unidades.map((u) => u.id), averiado: !!x.averiado }));
+  const activaAhora = g.linea || LINEAS_EN_JUEGO[0];
+  for (const [idLin, trozo] of Object.entries(g.porLinea || { [activaAhora]: g })) {
+    const ests = (LINEAS[idLin] || {}).estaciones || ESTACIONES;
+    for (const [idx, lista] of Object.entries(trozo.apartado || {})) {
+      const e = ests[Number(idx)];
+      if (!e) continue;
+      const guardadas = lista.filter((x) => x.unidades.length).map((x) => ({ via: x.via, ids: x.unidades.map((u) => u.id), averiado: !!x.averiado }));
+      if (guardadas.length) apartado[e.n] = [...(apartado[e.n] || []), ...guardadas];
+    }
+  }
 
   const slots = g.trenes.filter((t) => !t.esVacio).map((t) => {
     const ids = t.unidades.map((u) => u.id);
@@ -2511,6 +3875,8 @@ function estadoTrasTurno(g, camp) {
     .filter((t) => !t.esVacio && t.estado === "suprimido" && t.reponer)
     .map((t) => ({
       circ: t.i,
+      // por nombre: el índice no vale entre líneas ni entre turnos
+      donde: (ESTACIONES[t.reponer.idx] || {}).n,
       idx: t.reponer.idx,
       cuando: t.reponer.cuando % (24 * 60),
       ids: t.reponer.unidades.map((u) => u.id),
@@ -2519,11 +3885,22 @@ function estadoTrasTurno(g, camp) {
   /* La situación de la línea también se hereda: el turno entrante recoge la
      línea tal y como la deja el saliente. Sin esto, acabar con todo el
      servicio retrasado y los andenes llenos no tenía ninguna consecuencia. */
-  const retrasos = g.trenes.filter((t) => !t.esVacio).map((t) => Math.round(t.retraso * 10) / 10);
-  const andenes = g.andenes.map((a2) => ({ alcala: Math.round(a2.alcala), pio: Math.round(a2.pio) }));
-  const restricciones = (g.restricciones || [])
-    .filter((x) => x.hasta > g.reloj)
-    .map((x) => ({ ...x, dura: Math.round(x.hasta - g.reloj) }));
+  /* Y se hereda POR LÍNEA: los retrasos, los andenes y las restricciones de la
+     C-7 no valen para la C-1, que tiene otras circulaciones y otras
+     estaciones. Guardado en común, el turno siguiente intentaba aplicar a una
+     línea el estado de la otra.                                        */
+  const porLineaFin = {};
+  for (const [idLin, trozo] of Object.entries(g.porLinea || { [activaAhora]: g })) {
+    porLineaFin[idLin] = {
+      retrasos: (trozo.trenes || []).filter((t) => !t.esVacio).map((t) => Math.round(t.retraso * 10) / 10),
+      andenes: (trozo.andenes || []).map((a2) => ({ alcala: Math.round(a2.alcala), pio: Math.round(a2.pio) })),
+      restricciones: (trozo.restricciones || []).filter((x) => x.hasta > g.reloj).map((x) => ({ ...x, dura: Math.round(x.hasta - g.reloj) })),
+    };
+  }
+  const propio = porLineaFin[activaAhora] || { retrasos: [], andenes: [], restricciones: [] };
+  const retrasos = propio.retrasos;
+  const andenes = propio.andenes;
+  const restricciones = propio.restricciones;
 
   const punt = g.kpi.muestras ? (g.kpi.puntuales / g.kpi.muestras) * 100 : 100;
   const suprimidas = g.trenes.filter((t) => t.estado === "suprimido").length;
@@ -2537,9 +3914,64 @@ function estadoTrasTurno(g, camp) {
     suprimidas: camp.acum.suprimidas + suprimidas,
   };
 
+  /* Ficha de este turno para el histórico. Se guarda lo justo para poder
+     comparar turnos entre sí: con veinte turnos son unos 4 KB.          */
+  const b = balanceTurno(g);
+  const ficha = {
+    dia: camp.dia,
+    turno: camp.turno,
+    turnoN: g.turnoN,
+    punt: Math.round(b.punt * 10) / 10,
+    ret: Math.round(b.retrasoMedio * 10) / 10,
+    ocup: Math.round(b.ocupMedia),
+    viajeros: Math.round(b.transportados),
+    afect: Math.round(b.afect),
+    coste: Math.round(b.coste),
+    circ: b.completas,
+    inc: b.incidencias,
+    /* Calidad del turno: la nota general y la de cada línea con su desglose.
+       Es lo que permite mirar atrás y ver si el servicio mejora o empeora, no
+       solo si los trenes llegaban a su hora.                           */
+    calidad: notaGeneral(g),
+    calLineas: Object.fromEntries(
+      Object.entries(g.porLinea || {}).map(([id, t]) => {
+        const n = notaCalidad(t.cal);
+        return [id, { nota: n.nota, retraso: n.retraso, agobio: n.agobio, material: n.material, roto: n.roto }];
+      })
+    ),
+    puntos: puntosTurno(g),
+    pico: Math.round(b.picoRetraso),
+    horaPico: Math.round(b.horaPico),
+    apuro: b.minutosApuro,
+  };
+  const historico = [...(camp.historico || []), ficha].slice(-60);
+
+  /* Libro de averías. Las que no se resolvieron siguen abiertas y la unidad
+     empieza el turno siguiente con ellas: continuar el servicio deja de salir
+     gratis en cuanto pasa el día.                                       */
+  const libro = { ...(camp.libro || {}) };
+  for (const av of g.averiasTurno || []) {
+    const hoja = [...(libro[av.id] || [])];
+    hoja.push({ dia: camp.dia, turno: av.turno, m: av.m, tipo: av.tipo, nombre: av.nombre, grado: av.grado, resuelta: av.resuelta });
+    libro[av.id] = hoja.slice(-12);
+  }
+  // el paso por taller cierra todas las averías abiertas de esa unidad
+  for (const [id, v] of Object.entries(g.taller || {})) {
+    if (v.restan - 1 > 0) continue;
+    libro[id] = (libro[id] || []).map((x) => ({ ...x, resuelta: true, taller: v.dep }));
+  }
+  for (const id of g.reparadas || []) libro[id] = (libro[id] || []).map((x) => ({ ...x, resuelta: true, taller: "reparada" }));
+
+  // lo que la unidad arrastra al turno siguiente
+  const arrastradas = {};
+  for (const [id, hoja] of Object.entries(libro)) {
+    const abierta = [...hoja].reverse().find((x) => !x.resuelta);
+    if (abierta) arrastradas[id] = { tipo: abierta.tipo, nombre: abierta.nombre, grado: abierta.grado };
+  }
+
   const iT = ORDEN_TURNOS.indexOf(camp.turno);
   const ultimo = iT === ORDEN_TURNOS.length - 1;
-  return { dia: ultimo ? camp.dia + 1 : camp.dia, turno: ultimo ? ORDEN_TURNOS[0] : ORDEN_TURNOS[iT + 1], desg, averiadas, taller, apartado, slots, reponer, retrasos, andenes, restricciones, acum };
+  return { historico, libro, arrastradas, dia: ultimo ? camp.dia + 1 : camp.dia, turno: ultimo ? ORDEN_TURNOS[0] : ORDEN_TURNOS[iT + 1], desg, averiadas, taller, apartado, slots, reponer, retrasos, andenes, restricciones, porLineaFin, acum };
 }
 
 /* ── retirada nocturna ──────────────────────────────────────────
@@ -2585,7 +4017,9 @@ function planRetirada(libres) {
   const llegadas = (circ, cab, desde, hasta) => {
     const off = (circ - 1) * INTERVALO;
     const out = [];
-    for (const q of FASES_CAB[cab]) for (let k = 0; k < 22; k++) {
+    // hasta cubrir la ventana pedida, no un número fijo de vueltas
+    const kTope = Math.ceil((hasta - off) / CICLO) + 1;
+    for (const q of FASES_CAB[cab]) for (let k = 0; k <= kTope; k++) {
       const T = off + q + CICLO * k;
       if (T >= desde && T <= hasta) out.push(T);
     }
@@ -2693,7 +4127,7 @@ function programarArranque(g) {
       nombre: nombreDe(CIRCULACIONES + t.i),
       tipo: "nominal",
       estado: "entrante",
-      lugar: ESTACIONES[idx].cab || ESTACIONES[idx].n,
+      lugar: cabeceraDe(idx),
       entra: cuando - 20,
       cond: 0,
       jornada: 0,
@@ -2705,12 +4139,134 @@ function programarArranque(g) {
     g.personal = [...g.personal, maq];
 
     g.apartado = { ...g.apartado, [idx]: (g.apartado[idx] || []).filter((x) => x !== lote) };
-    t.reponer = { idx, cab: ESTACIONES[idx].cab || ESTACIONES[idx].n, cuando, unidades: lote.unidades.map((u) => ({ ...u })), maq: maq.id };
+    t.reponer = { idx, cab: cabeceraDe(idx), cuando, unidades: lote.unidades.map((u) => ({ ...u })), maq: maq.id };
     log(g, "ok", `Circulación ${t.i}: saldrá de ${ESTACIONES[idx].n}${via ? `, ${via}` : ""}, a las ${hhmm(cuando)}.`);
   }
 }
 
+/* Arranca el turno con todas las líneas en juego. La principal se construye
+   con el material que ha asignado el jugador; las demás, con su parque propio
+   y de forma automática, porque de momento no se gestionan a mano.     */
 function comenzarTurno(slots, apart, camp) {
+  /* Puede recibir el reparto de una sola línea —una lista de circulaciones— o
+     el de todas, indexado por línea. Se normaliza aquí para que el resto no
+     tenga que distinguirlo.                                             */
+  const bruto = slots && !Array.isArray(slots) ? slots : { [LINEAS_EN_JUEGO[0]]: slots };
+  const asigLineas = {};
+  for (const [id, v] of Object.entries(bruto || {})) asigLineas[id] = Array.isArray(v) ? v : v && v.slots;
+
+  /* Reparto del material apartado: cada composición va a una sola línea. La
+     principal se queda con lo que esté en sus estaciones.              */
+  const yaRepartido = new Set();
+  const suyoPrincipal = {};
+  for (const [k, v] of Object.entries(apart || {})) {
+    const donde = k.split("|")[0];
+    const L0 = LINEAS[LINEAS_EN_JUEGO[0]];
+    if (L0.estaciones.some((e) => e.n === donde) || Number.isFinite(Number(donde))) {
+      suyoPrincipal[k] = v;
+      yaRepartido.add(k);
+    }
+  }
+  /* Todo lo que el jugador ha asignado, en cualquier línea. Se le pasa ya a la
+     primera para que no se lleve a la reserva material que otra necesita:
+     antes la C-7 apartaba como reserva Civias que la C-1 tenía en servicio. */
+  const asignadasTodas = new Set();
+  for (const v of Object.values(asigLineas)) {
+    const planas = (v || []).flat();
+    for (const x of planas) if (x) asignadasTodas.add(x);
+  }
+  for (const v of Object.values(apart || {})) {
+    for (const x of v || []) if (x) asignadasTodas.add(x);
+  }
+
+  const g0 = comenzarLinea(asigLineas[LINEAS_EN_JUEGO[0]], suyoPrincipal, camp, LINEAS_EN_JUEGO[0], asignadasTodas);
+  g0.porLinea = {};
+  guardarLinea(g0, LINEAS_EN_JUEGO[0]);
+
+  /* Material ya comprometido. Sin esto la segunda línea cogía unidades que
+     ya estaban dando servicio en la primera, y el mismo tren aparecía en dos
+     sitios a la vez.                                                    */
+  const usadas = new Set([
+    ...g0.trenes.flatMap((t) => t.unidades.map((u) => u.id)),
+    ...g0.reserva.map((u) => u.id),
+    ...Object.values(g0.apartado || {}).flat().flatMap((x) => x.unidades.map((u) => u.id)),
+  ]);
+
+  for (const id of LINEAS_EN_JUEGO.slice(1)) {
+    /* Las circulaciones que el jugador haya asignado a esta línea. Puede
+       llegar como lista directa o envuelta en un objeto.               */
+    const suya = asigLineas[id];
+    const slotsId = Array.isArray(suya) ? suya : suya && suya.slots;
+    /* El apartado de una estación compartida se le entrega a UNA línea: es
+       material físico y no puede estar en dos sitios. Las demás lo ven desde
+       el perfil de la estación y pueden tomarlo durante el turno.      */
+    const suyo = {};
+    for (const [k, v] of Object.entries(apart || {})) {
+      const donde = k.split("|")[0];
+      if (yaRepartido.has(k)) continue;
+      const enEsta = LINEAS[id].estaciones.some((e) => e.n === donde || String(LINEAS[id].estaciones.indexOf(e)) === donde);
+      if (!enEsta) continue;
+      suyo[k] = v;
+      yaRepartido.add(k);
+    }
+    const gx = comenzarLinea(slotsId || null, suyo, camp, id, usadas);
+    for (const t of gx.trenes) for (const u of t.unidades) usadas.add(u.id);
+    for (const u of gx.reserva) usadas.add(u.id);
+    g0.porLinea[id] = {};
+    for (const k2 of CAMPOS_LINEA) g0.porLinea[id][k2] = gx[k2];
+    // el registro del turno es común: se acumula lo que aporta cada línea
+    g0.log = [...g0.log, ...gx.log.filter((l) => l.k !== "info")];
+  }
+  /* Los maquinistas de reserva son del TURNO, no de una línea: los cinco de
+     Chamartín pueden acudir a la C-7, a la C-1 o a la que se añada mañana. Se
+     sacan de las listas de cada línea y se guardan aparte, en una bolsa común
+     a la que todas acuden.                                             */
+  g0.reservaPersonal = [];
+  const cubiertos = {}; // cuántos se han dado ya de alta en cada estación
+  for (const [id, trozo] of Object.entries(g0.porLinea)) {
+    const suyos = (trozo.personal || []).filter((m) => m.tipo === "reserva");
+    trozo.personal = (trozo.personal || []).filter((m) => m.tipo !== "reserva");
+    /* Cada estación aporta los suyos UNA vez. Si dos líneas paran en Chamartín,
+       las dos daban de alta a los cinco y el turno acababa con diez.    */
+    for (const m of suyos) {
+      const tope = (RESERVAS_RED.find(([donde]) => donde === m.lugar) || [null, 0])[1];
+      const ya = cubiertos[m.lugar] || 0;
+      if (ya >= tope) continue;
+      cubiertos[m.lugar] = ya + 1;
+      g0.reservaPersonal.push(m);
+    }
+    if (id === LINEAS_EN_JUEGO[0]) g0.personal = trozo.personal;
+  }
+
+  entrarLinea(g0, LINEAS_EN_JUEGO[0]);
+  return g0;
+}
+
+function comenzarLinea(slots, apart, camp, idLinea, comprometidas) {
+  fijarLinea(idLinea);
+  /* El apartado llega indexado por NOMBRE de estación, porque una misma vía
+     tiene distinto número en cada línea: Chamartín es la 10 en la C-7 y la 0
+     en la C-1. Aquí se traduce a los índices de esta línea y se descarta lo
+     que corresponda a estaciones por las que no pasa.                  */
+  if (apart) {
+    const traducido = {};
+    for (const [k, v] of Object.entries(apart)) {
+      const [donde, via] = k.split("|");
+      const i = Number.isFinite(Number(donde)) ? Number(donde) : ESTACIONES.findIndex((e) => e.n === donde);
+      if (i >= 0 && ESTACIONES[i]) traducido[clave(i, via)] = v;
+    }
+    apart = traducido;
+  }
+  /* Sin asignación del jugador, la línea arranca con el material que le
+     corresponde: tantas composiciones sencillas como circulaciones, y sin
+     tocar el que ya está comprometido en otra línea.                  */
+  if (!slots) {
+    const L = LINEAS[idLinea];
+    const ocupadas = comprometidas || new Set();
+    const libres = CATALOGO.filter((u) => L.series.includes(u.serie) && !ocupadas.has(u.id)).slice(0, CIRCULACIONES);
+    slots = libres.map((u) => [u.id, null]);
+    while (slots.length < CIRCULACIONES) slots.push([null, null]);
+  }
   const defTurno = TURNOS.find((x) => x.id === TURNO_ID) || TURNOS[0];
   const personal = [];
   let k = 0;
@@ -2743,7 +4299,8 @@ function comenzarTurno(slots, apart, camp) {
       i: j + 1,
       serie: unidades[0] ? unidades[0].serie : "446",
       unidades,
-      offset: j * INTERVALO,
+      // el desfase coloca la cadencia en los minutos reales de salida
+      offset: j * INTERVALO + DESFASE,
       retraso: 0,
       estado: "servicio",
       maq: titulares[j].id,
@@ -2756,6 +4313,10 @@ function comenzarTurno(slots, apart, camp) {
       viaCab: null,
       hist: [],
       cuadroRelevos: [], // relevos previstos por el cuadro, en orden
+      /* Posición minuto a minuto para la malla. Se guarda solo el número de
+         estación con un decimal: un turno entero son 480 valores por tren, que
+         en el guardado ocupan poco más de 2 KB.                          */
+      traza: [],
       marchas: [], // recorridos realmente efectuados, para el historial // sucesos que han movido el retraso
       acum: { paradas: 0, maquinista: 0, bloqueo: 0 }, // deriva continua acumulada
       pax: new Array(N).fill(0), // viajeros a bordo, por estación de destino
@@ -2771,6 +4332,14 @@ function comenzarTurno(slots, apart, camp) {
       alarmaSuelta: null, // hora en que puede repetirse la alarma
       altercadoVivo: null, // hora en que se comprueba si el altercado va a más
       carteristas: false, // siguen a bordo tras una medida insuficiente
+      climaViciada: null, // hora en que se comprueba si el ambiente estalla
+      degradada: null, // marcha con pérdida periódica por avería sin resolver
+      degradaGrado: null, // grado en que quedó la avería que se arrastra
+      averiaHeredada: null, // avería sin resolver que viene del turno anterior
+      esperaTransbordo: null, // el primer tren del mismo sentido recogerá su pasaje
+      porContraria: null, // recorre un tramo banalizado por la vía del otro sentido
+      idxPrev: null, // posición del minuto anterior, para saber si acaba de entrar
+      dirPrev: null,
       esperaVia: null, // sin vía libre a la entrada de una estación
       nocheEn: null, // dónde ha quedado estacionado al cierre del servicio
       viaPaso: null, // vía que ocupa al pasar por una estación con varias
@@ -2822,9 +4391,12 @@ function comenzarTurno(slots, apart, camp) {
   const enVia = new Set();
 
   if (camp && camp.apartado && Object.keys(camp.apartado).length) {
-    // apartado heredado del turno anterior, tal y como quedó
-    for (const [i, lista] of Object.entries(camp.apartado)) {
-      const idx = Number(i);
+    /* Apartado heredado, indexado por nombre de estación. Solo se recoge lo
+       que está en estaciones de ESTA línea: lo demás pertenece a otra y lo
+       recogerá ella.                                                    */
+    for (const [donde, lista] of Object.entries(camp.apartado)) {
+      const idx = Number.isFinite(Number(donde)) ? Number(donde) : ESTACIONES.findIndex((e) => e.n === donde);
+      if (idx < 0 || !ESTACIONES[idx]) continue;
       for (const x of lista) {
         const uds = x.ids.map(conDesgaste).filter(Boolean);
         if (!uds.length) continue;
@@ -2859,12 +4431,16 @@ function comenzarTurno(slots, apart, camp) {
       if (!t) continue;
       const uds = rp.ids.map(conDesgaste).filter(Boolean);
       if (!uds.length) continue;
-      const cab = ESTACIONES[rp.idx].cab || ESTACIONES[rp.idx].n;
+      /* Se localiza por nombre, y si esa estación no pertenece a esta línea la
+         reposición es de otra: no se puede cumplir aquí.               */
+      const idxRep = rp.donde ? ESTACIONES.findIndex((e) => e.n === rp.donde) : rp.idx;
+      const cab = cabeceraDe(idxRep);
+      if (!cab) continue;
       const m = alta({ tipo: "nominal", estado: "entrante", lugar: cab, entra: Math.max(INICIO, rp.cuando - 20) });
       t.estado = "suprimido";
       t.unidades = [];
       t.maq = null;
-      t.reponer = { idx: rp.idx, cab, cuando: rp.cuando, unidades: uds, maq: m.id };
+      t.reponer = { idx: idxRep, cab, cuando: rp.cuando, unidades: uds, maq: m.id };
       rp.ids.forEach((id) => heredadas.add(id));
     }
 
@@ -2902,13 +4478,42 @@ function comenzarTurno(slots, apart, camp) {
      arrastra cada circulación y con la gente que sigue esperando en los
      andenes. Es lo que hace que un turno mal llevado se pague en el
      siguiente.                                                          */
-  if (camp && camp.retrasos) trenes.forEach((t, j) => { if (camp.retrasos[j] !== undefined) t.retraso = camp.retrasos[j]; });
+  /* Lo heredado es el de ESTA línea. La campaña lo guarda por línea desde que
+     hay más de una; si viene de una partida antigua se usa el común.   */
+  const heredado = (camp && camp.porLineaFin && camp.porLineaFin[idLinea]) || (camp && idLinea === LINEAS_EN_JUEGO[0] ? camp : null);
+  if (heredado && heredado.retrasos) trenes.forEach((t, j) => { if (heredado.retrasos[j] !== undefined) t.retraso = heredado.retrasos[j]; });
 
   // el cuadro completo del día: lo que cada circulación debería hacer
   // solo las marchas del turno: las de antes no le corresponden a este puesto
   for (const t of trenes) t.marchas = rotacionDelDia(t, INICIO, FIN).map((m) => ({ ...m, estado: "prevista" }));
 
-  const reserva = LIBRES_C7.filter((u) => !usadas.has(u.id) && !enVia.has(u.id) && !enTaller.has(u.id) && !heredadas.has(u.id)).map((u) =>
+  /* Averías heredadas: la unidad que terminó el turno anterior con una avería
+     sin resolver la sigue teniendo. Se avisa al abrir el turno y el tren
+     arranca ya con la marcha degradada que le corresponda.              */
+  if (camp && camp.arrastradas)
+    for (const t of trenes) {
+      const rota = t.unidades.map((u) => camp.arrastradas[u.id]).find(Boolean);
+      if (!rota) continue;
+      t.degradada = rota.grado === "habitual" ? { min: 15, cada: 90, agrava: 0.05, desde: INICIO, tipo: rota.tipo } : { min: 5, cada: 90, agrava: 0.05, desde: INICIO, tipo: rota.tipo };
+      t.degradaGrado = rota.grado;
+      t.averiaHeredada = rota.nombre;
+    }
+
+  // primer punto de la traza: sin él la línea del gráfico arranca en el aire
+  for (const t of trenes) t.traza = [t.estado === "suprimido" ? null : Math.round(situacion(t, INICIO).idx * 10)];
+
+  /* La reserva de una línea no puede incluir material que ya está dando
+     servicio en otra: sin esta comprobación, cada línea se llevaba la flota
+     libre entera y las mismas unidades aparecían en las dos.          */
+  const reserva = LIBRES_C7.filter(
+    (u) =>
+      !usadas.has(u.id) &&
+      !enVia.has(u.id) &&
+      !enTaller.has(u.id) &&
+      !heredadas.has(u.id) &&
+      !(comprometidas && comprometidas.has(u.id) && !(slots || []).flat().includes(u.id)) &&
+      ((LINEAS[idLinea] || {}).series || ["446", "465", "450"]).includes(u.serie)
+  ).map((u) =>
     conDesgaste(u.id)
   );
 
@@ -2958,8 +4563,19 @@ function comenzarTurno(slots, apart, camp) {
     personal,
     reserva,
     kpi: { ...KPI_INICIAL },
-    log: [{ m: INICIO, k: "info", t: `Turno abierto. ${trenes.length} circulaciones y ${personal.filter((m) => m.tipo === "reserva").length} maquinistas de reserva.` }],
+    log: [{ m: INICIO, k: "info", t: `Turno abierto. ${trenes.length} circulaciones y ${RESERVAS.reduce((n2, r2) => n2 + r2[1], 0)} maquinistas de reserva.` }],
     cola: [],
+    reparadas: [], // salidas del taller en este turno: ya no están averiadas
+    pedirDestino: null, // circulación que espera que se le elija dónde apartarse
+    pedirRescate: null, // circulación inmovilizada que espera material de rescate
+    averiasTurno: [],
+    // contador de calidad propio: si no se crea aquí, la segunda línea acumula
+    // sobre el objeto de la primera y las dos acaban con la misma nota
+    cal: { retraso: 0, agobio: 0, material: 0, roto: 0, viajeros: 0 }, // averías declaradas en este turno, para el libro
+    /* Registro para la pantalla de estadísticas. Se toma una muestra cada diez
+       minutos, que son unas cincuenta por turno: suficiente para dibujar la
+       evolución del día sin engordar el guardado.                        */
+    estad: { muestras: [], suben: new Array(N).fill(0), bajan: new Array(N).fill(0), esperaMax: new Array(N).fill(0) },
     vacios: [], // movimientos ordenados cuyo maquinista aún va de camino
     // en campaña se hereda el taller del turno anterior; si no, el de apertura
     taller: camp
@@ -2972,10 +4588,10 @@ function comenzarTurno(slots, apart, camp) {
         ),
     desg: camp ? { ...camp.desg } : {}, // desgaste vivo fuera de los trenes
     // los viajeros que quedaron en el andén siguen ahí al cambiar el turno
-    andenes: camp && camp.andenes ? camp.andenes.map((a2) => ({ ...a2 })) : ESTACIONES.map(() => ({ alcala: 0, pio: 0 })),
+    andenes: heredado && heredado.andenes && heredado.andenes.length === N ? heredado.andenes.map((a2) => ({ ...a2 })) : ESTACIONES.map(() => ({ alcala: 0, pio: 0 })),
     apartado,
     // las restricciones que seguían vigentes continúan, con su tiempo restante
-    restricciones: camp && camp.restricciones ? camp.restricciones.map((x) => ({ ...x, hasta: INICIO + x.dura })) : [],
+    restricciones: heredado && heredado.restricciones ? heredado.restricciones.map((x) => ({ ...x, hasta: INICIO + x.dura })) : [],
     incCount: 0,
     incEspera: 0,
     proximoSorteo: INICIO + 20 + Math.floor(Math.random() * 25),
@@ -3008,9 +4624,73 @@ function log(g, k, t) {
 }
 
 // reservas de contingencia: solo para lo que se sale del cuadro
-function reservasEn(g, cab) {
-  return g.personal.filter((m) => m.tipo === "reserva" && m.estado === "reserva" && m.lugar === cab && !m.baja && margenDe(m) >= margenExigido(g));
+const esReservaLibre = (g, m, cab) =>
+  m.tipo === "reserva" && m.estado === "reserva" && m.lugar === cab && !m.baja && margenDe(m) >= margenExigido(g);
+
+/* Las reservas de Chamartín sirven a todas las líneas: un maquinista que está
+   allí de reserva puede tomar el servicio de cualquiera. Se buscan primero en
+   la plantilla de la propia línea y, si no queda ninguna, en las demás; al
+   tomar una de otra línea, se traspasa a esta.                         */
+/* Cuenta de reservas para PINTAR: recorre todas las líneas sin mover a nadie.
+   La otra función traslada maquinistas de una línea a otra, y llamarla al
+   dibujar cambiaría el estado solo por mirar el mapa.                   */
+/* Reservas libres en toda la red, estén donde estén. Pueden desplazarse. */
+function reservasLibresTotal(g) {
+  const libre = (m) => m.tipo === "reserva" && m.estado === "reserva" && !m.baja && !m.tren;
+  return ((g.personal || []).filter(libre).length + (g.reservaPersonal || []).filter(libre).length);
 }
+
+
+function reservasVisibles(g, cab) {
+  return ((g.personal || []).filter((m) => esReservaLibre(g, m, cab)).length + (g.reservaPersonal || []).filter((m) => esReservaLibre(g, m, cab)).length);
+}
+
+
+// cabeceras que de verdad tienen bolsa de reservas en este turno
+function tieneReservas(g, cab) {
+  /* Mira también la bolsa común del turno, que es donde están de verdad: sin
+     esto el mapa no pintaba ninguna reserva aunque las hubiera.        */
+  const enLista = (lista) => (lista || []).some((m) => m.tipo === "reserva" && m.lugar === cab);
+  if (enLista(g.reservaPersonal)) return true;
+  if (enLista(g.personal)) return true;
+  return Object.values(g.porLinea || {}).some((t) => enLista(t.personal));
+}
+
+
+/* Reservas libres en una cabecera. Salen de la bolsa común del turno: no
+   pertenecen a ninguna línea, así que cualquiera puede echar mano de ellas.
+   Al asignarles un tren pasan a la plantilla de esa línea.             */
+function reservasEn(g, cab) {
+  const propias = (g.personal || []).filter((m) => esReservaLibre(g, m, cab));
+  const bolsa = (g.reservaPersonal || []).filter((m) => esReservaLibre(g, m, cab));
+  return [...propias, ...bolsa];
+}
+
+/* Un reserva que ya ha tomado un tren deja de estar disponible: se incorpora a
+   la plantilla de la línea que lo ha llamado.                          */
+/* El maquinista de un tren. Puede estar en la plantilla de la línea o todavía
+   en la bolsa común, si acaba de tomar el servicio este mismo minuto. Se busca
+   en los dos sitios desde un único punto, para no tener que acordarse en cada
+   uno de los que lo consultan.                                          */
+function maqDe(g, t) {
+  if (!t || !t.maq) return null;
+  return (g.personal || []).find((x) => x.id === t.maq) || (g.reservaPersonal || []).find((x) => x.id === t.maq) || null;
+}
+
+function incorporarReservas(g) {
+  if (!g.reservaPersonal || !g.reservaPersonal.length) return;
+  /* Se incorporan a la línea los que ya tienen tren asignado AQUÍ. Si se
+     miraba solo su estado, un reserva llamado por otra línea se incorporaba a
+     la equivocada y su tren se quedaba con un maquinista que no figuraba en
+     ninguna plantilla.                                                  */
+  const mios = new Set(g.trenes.map((t) => t.maq).filter(Boolean));
+  const tomados = g.reservaPersonal.filter((m) => mios.has(m.id));
+  if (!tomados.length) return;
+  g.reservaPersonal = g.reservaPersonal.filter((m) => !tomados.includes(m));
+  g.personal = [...g.personal, ...tomados];
+}
+
+
 
 // relevo ordinario: el nominal al que le toca entrar en esa cabecera
 /* Margen que se le exige a quien entra de relevo. Pedir siempre una hora
@@ -3028,9 +4708,34 @@ function nominalEn(g, cab) {
 
 /* ── motor ──────────────────────────────────────────────────── */
 
+/* Un minuto de turno. Lo común —el reloj, el sorteo de incidencias, el fin de
+   turno— se resuelve una vez; el movimiento de trenes, los andenes, el
+   personal y la vía única se resuelven línea por línea.               */
 function minuto(g) {
   const r = g.reloj;
+  const activa = g.linea || LINEAS_EN_JUEGO[0];
+
+  for (const id of Object.keys(g.porLinea || { [activa]: 1 })) {
+    entrarLinea(g, id);
+    const antes = g.cola.length;
+    minutoLinea(g, r);
+    /* Todo aviso nacido en este minuto pertenece a esta línea. Se anota aquí y
+       no en cada punto donde se encola: eran once sitios distintos y solo uno
+       lo hacía, así que el resto acababan atribuidos a la línea que estuviera
+       mirando el jugador.                                               */
+    for (let k = antes; k < g.cola.length; k++) if (!g.cola[k].linea) g.cola[k].linea = id;
+    guardarLinea(g, id);
+  }
+  entrarLinea(g, activa);
+
+  return g;
+}
+
+function minutoLinea(g, r) {
+  incorporarReservas(g);
   llenarAndenes(g);
+  calidadDelMinuto(g, r);
+  reaccionesDelMinuto(g, r);
 
   for (const m of g.personal) {
     if (m.estado === "conduciendo") {
@@ -3050,6 +4755,12 @@ function minuto(g) {
         } else {
           m.estado = m.tipo === "reserva" ? "reserva" : "entrante";
           m.entra = g.reloj;
+          /* Un reserva que termina su descanso vuelve a estar disponible para
+             CUALQUIER línea, así que regresa a la bolsa común.         */
+          if (m.tipo === "reserva" && !m.tren) {
+            g.personal = g.personal.filter((x) => x.id !== m.id);
+            g.reservaPersonal = [...(g.reservaPersonal || []), m];
+          }
         }
       }
     }
@@ -3064,9 +4775,22 @@ function minuto(g) {
   // se libera la autorización de quien ya ha despejado el tramo, y se concede
   // a quien estuviera dentro cuando apareció la incidencia
   for (const o of g.trenes) {
-    if (o.estado === "suprimido") {
+    /* Suprimidos e inmovilizados sueltan el tramo: el suprimido porque ya no
+       circula, y el inmovilizado porque está en la vía cortada. Si lo
+       retuvieran, nadie podría cruzar en ninguno de los dos sentidos.   */
+    if (o.estado === "suprimido" || o.inmovil) {
       o.enVU = null;
+      o.esperaCruce = null;
+      o.porContraria = null;
       continue;
+    }
+
+    /* Se vuelve a la vía propia al salir del tramo, no antes: es lo que hace
+       que el tren termine el trayecto por donde entró.                  */
+    if (o.porContraria) {
+      const sp = situacion(o, r);
+      const fuera = sp.dir !== o.porContraria.dir || sp.idx <= o.porContraria.a || sp.idx >= o.porContraria.b;
+      if (fuera) o.porContraria = null;
     }
     const so = situacion(o, r);
 
@@ -3099,33 +4823,119 @@ function minuto(g) {
         if (caducada && vigente) log(g, "aviso", `Tramo de vía única ${ESTACIONES[o.enVU.a].corto}–${ESTACIONES[o.enVU.b].corto}: liberado por caducidad.`);
         o.enVU = null;
       }
-    } else if (so.dir !== "maniobra" && !o.enDesviada && !o.rotando) {
+    } else if (so.dir !== "maniobra" && !o.enDesviada && !o.rotando && !o.inmovil) {
       // al aparecer la incidencia puede haber trenes ya dentro: se autoriza a
       // los del sentido que primero se encuentre; los contrarios se retienen
       const dentro = tramos.find((x) => dentroTramo(o, r, x.tramo));
       if (dentro) {
         const k = `${dentro.tramo.a}-${dentro.tramo.b}`;
-        const otro = g.trenes.find((x) => x.enVU && `${x.enVU.a}-${x.enVU.b}` === k);
-        if (!otro || otro.enVU.dir === so.dir) o.enVU = { a: dentro.tramo.a, b: dentro.tramo.b, dir: so.dir, desde: r };
+        /* Todos los que ya estaban dentro quedan autorizados a salir, vayan en
+           el sentido que vayan: no se les puede hacer retroceder. Mientras
+           quede alguno, no entra nadie nuevo.                           */
+        {
+          o.enVU = { a: dentro.tramo.a, b: dentro.tramo.b, dir: so.dir, desde: r };
+          // si es su sentido el cortado, recorre el tramo por la vía contraria
+          if (dentro.dir === so.dir) o.porContraria = { a: dentro.tramo.a, b: dentro.tramo.b, dir: so.dir };
+        }
       }
     }
+  }
+
+  /* Ocupación del tramo. Se guardan TODOS los sentidos que hay dentro, no solo
+     el primero: al declararse una incidencia puede haber trenes de los dos
+     sentidos ya metidos, y hay que dejarlos salir antes de admitir a nadie
+     nuevo. Con un solo sentido registrado, los contrarios seguían entrando y
+     acababa habiendo trenes de frente en el mismo tramo.                */
+  /* ── control de vía única, por bloqueo entre estaciones ──────────
+     Un tren no entra en el tramo entre dos estaciones con agujas si hay otro
+     viniendo de frente dentro. Espera en la estación de acceso a que el otro
+     salga. Es la regla de toda la vida y no necesita registro de permisos:
+     basta con mirar quién hay dentro en cada momento.
+
+     Se decide ANTES de mover a nadie y se guarda en el propio tren, porque el
+     bucle de movimiento tiene varias salidas anticipadas y la comprobación
+     podía quedarse sin ejecutar.                                        */
+  /* Reserva del minuto. Sin ella, dos trenes de sentidos opuestos situados en
+     los dos accesos miraban el tramo a la vez, lo veían vacío los dos, y los
+     dos entraban en el mismo minuto. Es el grueso de los casos que se
+     escapaban: no eran saltos raros, era esta carrera.                  */
+  const reservado = {};
+
+  /* Candidatos a entrar en un tramo este minuto. Se resuelven POR HORA DE PASO
+     y no en el orden del array: antes ganaba siempre el mismo tren la reserva
+     del tramo, así que el del otro sentido esperaba indefinidamente aunque la
+     vía estuviera vacía.                                                */
+  const candidatos = [];
+  for (const t of g.trenes) {
+    t.bloqueoVU = null;
+    if (t.estado === "suprimido" || t.inmovil || t.rotando || t.enDesviada) continue;
+    const sv = situacion(t, r);
+    if (sv.dir === "maniobra") continue;
+
+    for (const rest of tramos) {
+      const tr = rest.tramo;
+      /* Un tren que YA está dentro del tramo no se toca: sale por donde iba.
+         Antes se le volvía a evaluar como si fuera a entrar, y si en ese
+         momento el tramo estaba tomado se le devolvía al acceso. El efecto era
+         que entraba, y una décima después reaparecía atrás: entraba y se
+         expulsaba a sí mismo, minuto tras minuto.                        */
+      if (dentroTramo(t, r, tr)) break;
+      if (!dentroTramo(t, r + 1, tr)) continue;
+      // la hora prevista de paso: la de quien espera se fijó al empezar a esperar
+      const prevista = t.esperaCruce ? t.esperaCruce.prevista : r - t.retraso;
+      candidatos.push({ t, tr, dir: sv.dir, prevista });
+      break;
+    }
+  }
+
+  candidatos.sort((a2, b2) => a2.prevista - b2.prevista);
+  for (const c of candidatos) {
+    const k2 = `${c.tr.a}-${c.tr.b}`;
+    const deFrente = g.trenes.some(
+      (o) => o.i !== c.t.i && o.estado !== "suprimido" && !o.inmovil && dentroTramo(o, r, c.tr) && situacion(o, r).dir !== c.dir
+    );
+    // o bien ya lo ha tomado otro en sentido contrario en este mismo minuto
+    if (deFrente || (reservado[k2] && reservado[k2] !== c.dir)) {
+      c.t.bloqueoVU = { tramo: c.tr, dir: c.dir };
+      continue;
+    }
+    reservado[k2] = c.dir;
   }
 
   const vu = {};
   for (const rest of tramos) {
     const k = `${rest.tramo.a}-${rest.tramo.b}`;
     const ocup = g.trenes.filter((o) => o.enVU && `${o.enVU.a}-${o.enVU.b}` === k);
-    vu[k] = { dir: ocup.length ? ocup[0].enVU.dir : null, n: ocup.length };
+    vu[k] = { dirs: [...new Set(ocup.map((o) => o.enVU.dir))], n: ocup.length };
   }
-  const libreVU = (k, dir) => !vu[k] || !vu[k].dir || vu[k].dir === dir;
+  /* Libre para un sentido solo si no hay NADIE del contrario pisando el tramo.
+     Se miran los trenes de verdad y no solo las autorizaciones concedidas: un
+     tren que quedó dentro al declararse la incidencia ocupa la vía igual,
+     tenga permiso o no lo tenga.                                        */
+  const dentroDe = {};
+  for (const rest of tramos) {
+    const k = `${rest.tramo.a}-${rest.tramo.b}`;
+    dentroDe[k] = [
+      ...new Set(
+        g.trenes
+          .filter((o) => o.estado !== "suprimido" && dentroTramo(o, r, rest.tramo))
+          .map((o) => situacion(o, r).dir)
+      ),
+    ];
+  }
+  const libreVU = (k, dir) => !(dentroDe[k] || []).some((d) => d !== dir) && !(vu[k] && vu[k].dirs.some((d) => d !== dir));
   const tomarVU = (t, k, dir) => {
     if (vu[k]) {
-      vu[k].dir = dir;
+      if (!vu[k].dirs.includes(dir)) vu[k].dirs.push(dir);
       vu[k].n += 1;
     }
     const [a2, b2] = k.split("-").map(Number);
     // la autorización viaja con el tren y guarda cuándo se concedió
     t.enVU = { a: a2, b: b2, dir, desde: t.enVU && t.enVU.a === a2 && t.enVU.b === b2 ? t.enVU.desde : g.reloj };
+    /* Si su propio sentido está cortado, entra por la vía contraria y la
+       ocupa hasta salir del tramo, pase lo que pase con la incidencia. */
+    const rest2 = tramos.find((x) => x.tramo.a === a2 && x.tramo.b === b2);
+    if (rest2 && rest2.dir === dir) t.porContraria = { a: a2, b: b2, dir };
   };
   /* Cierre del tramo al sentido en curso. Sin esto se producía inanición: la
      prioridad la marca la hora prevista, y un tren retrasado siempre tiene
@@ -3188,7 +4998,13 @@ function minuto(g) {
         t.retraso += 1;
         const k = `${t.esperaCruce.a}-${t.esperaCruce.b}`;
         const dir = situacion(t, r).dir;
-        const libre = libreVU(k, dir);
+        /* Se mira quién hay DE VERDAD en el tramo, no el registro de permisos:
+           es la misma comprobación que impide entrar, y así la salida de la
+           espera y la entrada al tramo siguen exactamente la misma regla. */
+        const deFrente = g.trenes.some(
+          (o) => o.i !== t.i && o.estado !== "suprimido" && !o.inmovil && dentroTramo(o, r, rest.tramo) && situacion(o, r).dir !== dir
+        );
+        const libre = !deFrente && libreVU(k, dir);
         // ¿hay alguien realmente dentro, o el tramo está vacío?
         const vacio = !vu[k] || !vu[k].n;
         /* El tope de espera nunca salta la seguridad del tramo, solo el turno.
@@ -3231,17 +5047,106 @@ function minuto(g) {
     // material en vacío que aún espera a que se presente su maquinista
     if (t.esperaSalida && r < t.esperaSalida) continue;
 
-    // inmovilizado por avería muy grave: no se mueve hasta que llegue el socorro
+    /* Vía única: hay un tren de frente en el tramo, así que este espera en la
+       estación de acceso. Va lo primero del bucle a propósito: más abajo hay
+       varias salidas anticipadas por las que un tren podía colarse sin pasar
+       nunca por el control.                                             */
+    if (t.bloqueoVU) {
+      const trm = t.bloqueoVU.tramo;
+      const acc = t.bloqueoVU.dir === "alcala" ? trm.a : trm.b;
+      const sb = situacion(t, r);
+      const llegado = t.bloqueoVU.dir === "alcala" ? sb.idx >= acc - 0.05 : sb.idx <= acc + 0.05;
+      /* Solo se detiene al tren cuando ya ha llegado a la estación de acceso.
+         Antes se le paraba en cuanto se le veía venir, y acababa esperando en
+         plena vía a medio camino de la estación anterior. La posición se
+         calcula como reloj menos retraso, así que pararlo es sumarle un minuto
+         de retraso: saltarse su turno en el bucle no basta.             */
+      if (llegado) {
+        t.retraso += 1;
+        retenerEnAcceso(g, t, trm, t.bloqueoVU.dir, r);
+        continue;
+      }
+    }
+
+    /* Vía libre y el tren seguía esperando: se le da paso. El control de
+       entrada es ahora la única autoridad, así que si no lo bloquea, la espera
+       tiene que levantarse aquí. Sin esto los trenes se quedaban parados
+       indefinidamente delante de un tramo vacío.                        */
+    if (t.esperaCruce) {
+      const sigue = g.restricciones.some((x) => x.tramo && x.tramo.a === t.esperaCruce.a && x.tramo.b === t.esperaCruce.b);
+      log(
+        g,
+        "ok",
+        sigue
+          ? `Tren ${numeroTren(t, g.reloj)}: entra en el tramo de vía única desde ${ESTACIONES[t.esperaCruce.idx].n}.`
+          : `Tren ${numeroTren(t, g.reloj)}: restablecida la doble vía, reanuda marcha.`
+      );
+      apunta(g, t, `espera de cruce en ${ESTACIONES[t.esperaCruce.idx].corto}`, r - t.esperaCruce.desde);
+      t.esperaCruce = null;
+    }
+
+    /* Inmovilizado por avería muy grave. Hay tres desenlaces según cómo se
+       haya decidido resolverlo: el socorro clásico, la intervención de los
+       ATLs y el rescate con material propio.                            */
     if (t.inmovil) {
       t.retraso += 1;
       t.inmovil.restante -= 1;
-      if (t.inmovil.restante <= 0) {
-        const dest = estacionesParaSuprimir(g, t)[0];
-        log(g, "ok", `Tren ${numeroTren(t, g.reloj)}: remolcado hasta ${dest ? ESTACIONES[dest.idx].n : "la vía más próxima"}. Vía despejada.`);
-        apunta(g, t, "inmovilizado por avería muy grave", r - t.inmovil.desde);
+      if (t.inmovil.restante > 0) continue;
+
+      if (t.inmovil.atls) {
+        const idx = t.inmovil.idx;
+        apunta(g, t, "inmovilizado esperando a los ATLs", r - t.inmovil.desde);
         t.inmovil = null;
-        suprimir(g, t, `Tren ${numeroTren(t, g.reloj)}: retirado del servicio por avería muy grave.`, dest ? dest.idx : null);
+        t.detenido = null;
+        if (Math.random() < 0.7) {
+          levantarEnTodas(g, g.restricciones.filter((x) => x.tren === t.i).map((x) => x.id));
+          levantarEnTodas(g, g.restricciones.filter((x) => x.tren === t.i).map((x) => x.id));
+        g.restricciones = g.restricciones.filter((x) => x.tren !== t.i);
+          log(g, "ok", `Tren ${numeroTren(t, g.reloj)}: los ATLs resuelven la avería. Reanuda marcha y se levanta la vía única.`);
+        } else {
+          log(g, "bad", `Tren ${numeroTren(t, g.reloj)}: los ATLs no consiguen resolver la avería.`);
+          g.cola.push({
+            tipo: "inc",
+            grav: "critica",
+            tren: t.i,
+            lugar: ESTACIONES[idx].n,
+            titulo: `Los ATLs no resuelven la avería del ${numeroTren(t, g.reloj)}`,
+            datos: datosDeTren(g, t),
+            texto: "Los mecánicos no han podido devolver la tracción al tren. No queda más salida que rescatarlo.",
+            opciones: [
+              {
+                label: "Banalizar el tramo, realizar transbordo y enviar socorro",
+                detalle: "El pasaje transborda al primer tren del mismo sentido y se manda material a recogerlo",
+                tiempo: [25, 45],
+                ef: { rescate: { i: t.i } },
+              },
+            ],
+          });
+        }
+        continue;
       }
+
+      if (t.inmovil.rescate) {
+        apunta(g, t, "inmovilizado a la espera del rescate", r - t.inmovil.desde);
+        const dest = estacionesParaSuprimir(g, t)[0];
+        t.inmovil = null;
+        t.detenido = null;
+        levantarEnTodas(g, g.restricciones.filter((x) => x.tren === t.i).map((x) => x.id));
+        g.restricciones = g.restricciones.filter((x) => x.tren !== t.i);
+        /* El socorro se lo lleva remolcado y la vía queda despejada. Antes se
+           quedaba ahí como material vacío esperando a que se le eligiera
+           destino, y mientras tanto seguía frenando a todo su sentido: era lo
+           que atascaba la línea después del rescate.                    */
+        suprimir(g, t, `Tren ${numeroTren(t, g.reloj)}: remolcado por el material de socorro. Vía despejada.`, dest ? dest.idx : null);
+        g.pedirDestino = t.i; // taller o apartadero, lo elige el puesto de mando
+        continue;
+      }
+
+      const dest = estacionesParaSuprimir(g, t)[0];
+      log(g, "ok", `Tren ${numeroTren(t, g.reloj)}: remolcado hasta ${dest ? ESTACIONES[dest.idx].n : "la vía más próxima"}. Vía despejada.`);
+      apunta(g, t, "inmovilizado por avería muy grave", r - t.inmovil.desde);
+      t.inmovil = null;
+      suprimir(g, t, `Tren ${numeroTren(t, g.reloj)}: retirado del servicio por avería muy grave.`, dest ? dest.idx : null);
       continue;
     }
 
@@ -3279,12 +5184,14 @@ function minuto(g) {
     }
 
     if (t.rotando) {
-      const mq = t.maq ? g.personal.find((x) => x.id === t.maq) : null;
+      const mq = t.maq ? maqDe(g, t) : null;
       if (mq && !t.avisoRot && mq.cond + t.rotando.restante > COND_MAX) {
         t.avisoRot = true;
         g.cola.push({
           tipo: "aviso",
           titulo: `Maniobra demasiado larga en ${ESTACIONES[t.rotando.idx].n}`,
+      lugar: ESTACIONES[t.rotando.idx].n,
+      datos: datosDeTren(g, t),
           texto: `El ${numeroTren(t, g.reloj)} tiene que esperar ${t.rotando.restante} min a su nueva marcha, y ${mq.nombre} agotaría las 5h30 antes de terminar. En esa estación no hay personal de reserva.`,
           opciones: [
             { label: "Suspender la maniobra y seguir recorrido", detalle: "Continúa a cabecera con el retraso que lleva", ef: { abortarRotacion: t.i } },
@@ -3353,6 +5260,8 @@ function minuto(g) {
         g.cola.push({
           tipo: "aviso",
           titulo: `El ${numeroTren(t, g.reloj)} sigue retenido en ${cab}`,
+        lugar: cab,
+        datos: datosDeTren(g, t),
           texto: `Lleva ${rt(t.retraso)} min de retraso y no hay relevo disponible en ${cab}.${
             proximo ? ` El primero en estar libre allí es ${proximo.nombre}, a las ${hhmm(cuando)}.` : " No hay nadie previsto en esa cabecera."
           }`,
@@ -3551,7 +5460,7 @@ function minuto(g) {
 
     // puntualidad del maquinista: gana o pierde tiempo durante la marcha
     if (t.maq) {
-      const mq = g.personal.find((x) => x.id === t.maq);
+      const mq = maqDe(g, t);
       const pEs = fase(t, r);
       const rodando = pEs < LLEGA_ALCALA || (pEs >= SALE_ALCALA && pEs < LLEGA_PIO);
       if (rodando && mq) {
@@ -3586,6 +5495,11 @@ function minuto(g) {
       g.cola.push({
         tipo: "aviso",
         titulo: `${cab} sin vía de inversión`,
+      lugar: cab,
+      datos: [
+        { k: "Cabecera", v: cab },
+        { k: "Vías", v: "todas ocupadas", c: P.warn },
+      ],
         texto: `El ${numeroTren(t, g.reloj)} llega a ${cab} en 12 min y para entonces no habrá vía libre. De las ${est.rotVias.length}: ${
           info.disponibles.length < est.rotVias.length ? `${est.rotVias.length - info.disponibles.length} con material apartado` : "ninguna con material"
         }${quienes ? `, y seguirán ocupadas por ${quienes}` : ""}.`,
@@ -3619,34 +5533,17 @@ function minuto(g) {
        si ese minuto el tren salía antes del bucle por cualquier motivo, se
        colaba sin permiso y ya nadie volvía a mirarlo. Se comprueba por
        POSICIÓN, cada minuto, mientras el tren pise el tramo o su acceso.   */
-    let retenidoVU = false;
+    /* El control de vía única ya se ha resuelto arriba, antes de mover a nadie
+       y por orden de hora de paso. Aquí solo queda anotar que el tren ocupa el
+       tramo, para que el mapa y los avisos lo sepan. El control que había en
+       este punto retenía a los trenes medio índice antes de la estación, así
+       que esperaban en plena vía en vez de en el andén.                */
     for (const rest of tramos) {
       const k = `${rest.tramo.a}-${rest.tramo.b}`;
-      if (t.enVU && t.enVU.a === rest.tramo.a && t.enVU.b === rest.tramo.b) continue; // ya autorizado
       const sv = situacion(t, r);
       if (sv.dir === "maniobra") continue;
-      // ¿pisa ya el tramo, incluida su estación de acceso?
-      const pisa = sv.dir === "alcala"
-        ? sv.idx >= rest.tramo.a && sv.idx < rest.tramo.b
-        : sv.idx <= rest.tramo.b && sv.idx > rest.tramo.a;
-      if (!pisa) continue;
-      const acceso = sv.dir === "alcala" ? rest.tramo.a : rest.tramo.b;
-      const prevista = r - t.retraso;
-      // si ya está metido en el tramo, no se le puede echar: se le confirma
-      if (dentroTramo(t, r, rest.tramo)) {
-        tomarVU(t, k, sv.dir);
-        continue;
-      }
-      if (libreVU(k, sv.dir) && !hayPrioritario(k, prevista, t.i) && !esperaDeFrente(k, sv.dir)) {
-        tomarVU(t, k, sv.dir); // el tramo pasa a ser suyo hasta que lo despeje
-        continue;
-      }
-      // no puede pasar: espera el cruce en la estación de acceso
-      retenerEnAcceso(g, t, rest.tramo, sv.dir, r);
-      retenidoVU = true;
-      break;
+      if (dentroTramo(t, r, rest.tramo)) tomarVU(t, k, sv.dir);
     }
-    if (retenidoVU || t.esperaCruce) continue;
 
     // restricciones de vía: el tren se detiene en el punto los minutos que toque
     for (const rest of g.restricciones) {
@@ -3666,7 +5563,7 @@ function minuto(g) {
     }
 
     if (t.maq && t.relevo && !t.avisado && !t.excesoAutorizado) {
-      const m = g.personal.find((x) => x.id === t.maq);
+      const m = maqDe(g, t);
       const eta = etaRelevo(t, r);
       if (eta !== Infinity && m.cond + eta > COND_MAX) {
         t.avisado = true;
@@ -3674,6 +5571,8 @@ function minuto(g) {
         g.cola.push({
           tipo: "aviso",
           titulo: `Relevo comprometido en el ${numeroTren(t, g.reloj)}`,
+        lugar: t.relevo ? t.relevo.cab : null,
+        datos: datosDeTren(g, t),
           texto: `${m.nombre} lleva ${dur(m.cond)} de conducción. Con el retraso acumulado llegaría al relevo previsto de ${t.relevo.cab} superando las 5h30. Primera cabecera: ${e.cab}, a ${Math.round(e.min)} min.`,
           opciones: [
             { label: `Adelantar el relevo a ${e.cab}`, detalle: `Consume una de las ${reservasEn(g, e.cab).length} reservas de ${e.cab}`, ef: { adelantar: t.i } },
@@ -3687,7 +5586,10 @@ function minuto(g) {
 
   for (const t of g.trenes) {
     if (t.estado === "suprimido" || !t.maq) continue;
-    const m = g.personal.find((x) => x.id === t.maq);
+    /* El maquinista puede estar todavía en la bolsa común si acaba de tomar el
+       tren en este mismo minuto: se busca también ahí.                 */
+    const m = maqDe(g, t);
+    if (!m) continue;
     const tope = t.excesoAutorizado ? COND_MAX + 45 : COND_MAX;
     if (m.cond > tope) {
       // en la retirada nocturna el tren llega igualmente a su cabecera: se
@@ -3801,7 +5703,7 @@ function minuto(g) {
         if (m) {
           m.estado = "reserva";
           m.destinoViaje = null;
-          m.lugar = ESTACIONES[o.idx].cab || ESTACIONES[o.idx].n;
+          m.lugar = cabeceraDe(o.idx);
         }
         log(g, "bad", `El material de ${ESTACIONES[o.idx].n}, ${o.via}, ya no está: se anula el movimiento en vacío.`);
       }
@@ -3862,6 +5764,121 @@ function minuto(g) {
     if (g.trenes.some((t) => t.detenido || t.retenido || t.inmovil || t.esperaVia)) g.kpi.minutosApuro += 1;
   }
 
+  /* Rastro de la marcha real. Sin esto, la malla solo podría unir la salida
+     con la llegada en línea recta y perdería justo lo interesante: dónde se
+     detuvo el tren y cuánto tiempo.                                      */
+  const kTraza = Math.round((Math.round(r) - INICIO) / PASO_TRAZA);
+  if (kTraza >= 0 && kTraza <= (FIN - INICIO) / PASO_TRAZA + 30 && (Math.round(r) - INICIO) % PASO_TRAZA === 0) {
+    for (const t of g.trenes) {
+      if (!t.traza) t.traza = [];
+      // se guardan décimas enteras: ocupan la mitad que un decimal con punto
+      const pos = t.estado === "suprimido" ? null : Math.round(situacion(t, r).idx * 10);
+      while (t.traza.length < kTraza) t.traza.push(null);
+      t.traza[kTraza] = pos;
+    }
+  }
+
+  /* Muestra cada diez minutos para la evolución del día: viajeros a bordo y
+     en andén, retraso, puntualidad y ocupación en ese momento.          */
+  if (g.estad && Math.round(r) % 10 === 0) {
+    const enServicio = g.trenes.filter((t) => t.estado !== "suprimido" && !t.esVacio);
+    const conPasaje = enServicio.filter((t) => !t.rotando && !t.enDesviada && t.unidades.length && situacion(t, r).dir !== "maniobra");
+    const aBordo = enServicio.reduce((n, t) => n + t.pax.reduce((a2, b2) => a2 + b2, 0), 0);
+    const enAnden = g.andenes.reduce((n, a2) => n + a2.alcala + a2.pio, 0);
+    g.estad.muestras.push({
+      m: Math.round(r),
+      bordo: Math.round(aBordo),
+      anden: Math.round(enAnden),
+      ret: enServicio.length ? Math.round((enServicio.reduce((n, t) => n + retrasoEfectivo(t), 0) / enServicio.length) * 10) / 10 : 0,
+      punt: g.kpi.muestras ? Math.round((g.kpi.puntuales / g.kpi.muestras) * 1000) / 10 : 100,
+      ocup: conPasaje.length ? Math.round((conPasaje.reduce((n, t) => n + t.pax.reduce((x, y) => x + y, 0) / (plazasDe(t) || 1), 0) / conPasaje.length) * 1000) / 10 : 0,
+      circ: enServicio.length,
+    });
+    // pico de gente esperando en cada andén, para saber dónde aprieta
+    g.andenes.forEach((a2, i) => {
+      const total = a2.alcala + a2.pio;
+      if (total > (g.estad.esperaMax[i] || 0)) g.estad.esperaMax[i] = Math.round(total);
+    });
+  }
+
+  // un tren sin climatización todo el turno acaba dando problemas a bordo
+  for (const t of g.trenes) {
+    if (!t.climaViciada || r < t.climaViciada) continue;
+    t.climaViciada = null;
+    if (t.estado === "suprimido" || Math.random() > 0.2) continue;
+    const donde = ESTACIONES[Math.max(0, Math.min(N - 1, Math.round(situacion(t, r).idx)))];
+    g.cola.push({
+      tipo: "inc",
+      grav: "leve",
+      tren: t.i,
+      titulo: `Altercado a bordo en el ${numeroTren(t, g.reloj)}`,
+      lugar: donde.n,
+      datos: datosDeTren(g, t),
+      texto: `El calor a bordo termina provocando un altercado entre viajeros a la altura de ${donde.n}. Se requiere la intervención de seguridad.`,
+      opciones: [
+        {
+          label: "Esperar a seguridad en la estación",
+          detalle: "El tren queda retenido hasta la intervención",
+          tiempo: [8, 20],
+          ef: { retraso: { i: t.i, m: 8 + Math.floor(Math.random() * 13) } },
+        },
+        {
+          label: "Continuar hasta estación con dotación",
+          detalle: "Menos retraso, pero el altercado sigue a bordo y puede ir a más",
+          ef: { retraso: { i: t.i, m: 5 }, altercado: t.i },
+        },
+      ],
+    });
+    log(g, "bad", `Tren ${numeroTren(t, g.reloj)}: el calor a bordo acaba provocando un altercado.`);
+  }
+
+  /* Trenes en marcha degradada: cada tramo cumplido pagan su pérdida, y con
+     ella se tira por si la avería va a más.                             */
+  for (const t of g.trenes) {
+    const d = t.degradada;
+    if (!d || t.estado === "suprimido") continue;
+    if (r - d.desde < d.cada) continue;
+    d.desde = r;
+    retrasar(g, t, d.min, "marcha degradada por avería");
+    if (d.agrava > 0 && Math.random() < d.agrava) {
+      t.degradada = null;
+      g.cola.push(avanceAveria(g, t, d.tipo));
+      log(g, "bad", `Tren ${numeroTren(t, g.reloj)}: la avería va a más.`);
+    }
+  }
+
+  /* Transbordo al tren averiado: el primero que pasa por el punto en el mismo
+     sentido recoge su pasaje y pierde diez minutos parado a su lado.    */
+  for (const roto of g.trenes) {
+    const esp = roto.esperaTransbordo;
+    if (!esp) continue;
+    const socorrista = g.trenes.find((t) => {
+      if (t.i === roto.i || t.estado === "suprimido" || t.detenido || t.esVacio) return false;
+      const sv = situacion(t, r);
+      return sv.dir === esp.dir && Math.abs(sv.idx - esp.idx) < 0.6;
+    });
+    if (!socorrista) continue;
+    roto.esperaTransbordo = null;
+    // un transbordo forzoso se sufre y se comenta
+    if (!g.cal) g.cal = { retraso: 0, agobio: 0, material: 0, roto: 0, viajeros: 0 };
+    g.cal.roto += 600;
+    publicar(g, "transbordo", { L: g.linea, E: (ESTACIONES[Math.round(situacion(roto, g.reloj).idx)] || {}).n });
+    socorrista.detenido = { restante: 10, motivo: `transbordo del pasaje del ${numeroTren(roto, r)}` };
+    // el pasaje del averiado pasa al socorrista, en la medida en que quepa
+    const hueco = Math.max(0, (plazasDe(socorrista) || 0) - socorrista.pax.reduce((a2, b2) => a2 + b2, 0));
+    const aBordo = roto.pax.reduce((a2, b2) => a2 + b2, 0);
+    const pasan = Math.min(hueco, aBordo);
+    if (aBordo > 0) {
+      const prop = pasan / aBordo;
+      roto.pax.forEach((v, k) => {
+        socorrista.pax[k] += v * prop;
+        roto.pax[k] = 0;
+      });
+      g.kpi.afect += Math.round(aBordo);
+    }
+    log(g, "aviso", `Tren ${numeroTren(socorrista, r)}: recoge el pasaje del ${numeroTren(roto, r)}. Diez minutos de transbordo.`);
+  }
+
   aplicarSeparacion(g);
 
   for (const t of g.trenes) {
@@ -3889,7 +5906,21 @@ function minuto(g) {
       log(g, "ok", `${rest.txt}: restablecida la circulación normal.`);
     }
   }
+  /* Al levantarse una restricción, alguien lo agradece. Es lo que evita que el
+     muro sea solo un vertedero de quejas.                              */
+  const vencidas = g.restricciones.filter((x) => r >= x.hasta);
+  for (const x of vencidas) if (Math.random() < 0.45) publicar(g, "bien", { L: g.linea, E: (ESTACIONES[x.idx] || {}).n });
   g.restricciones = g.restricciones.filter((x) => r < x.hasta);
+
+  /* Se anota dónde ha quedado cada tren, y se hace AL FINAL: es el único dato
+     fiable de por dónde iba, y solo lo es si ya no queda ningún ajuste de
+     retraso por aplicar. Anotándolo antes, un tren retenido después constaba
+     como que ya estaba dentro del tramo y el control lo dejaba pasar.  */
+  for (const t of g.trenes) {
+    const sf = situacion(t, r);
+    t.idxPrev = sf.dir === "maniobra" ? null : sf.idx;
+    t.dirPrev = sf.dir;
+  }
 
   if (g.incEspera > 0) g.incEspera -= 1;
   if (r >= g.proximoSorteo) {
@@ -3897,10 +5928,21 @@ function minuto(g) {
       g.proximoSorteo = r + 10; // se pospone, no se pierde el sorteo
     } else {
       g.proximoSorteo = r + 55 + Math.floor(Math.random() * 11);
-      const def = sortearIncidencia(r);
+      const def = sortearIncidencia(r, g);
       const inc = def && def.gen(g);
       if (inc) {
-        g.cola.push({ tipo: "inc", ...inc });
+        /* La gravedad viene de la familia, salvo que el generador declare la
+           suya: las averías de material la deciden en el sorteo.        */
+        /* Si la incidencia no trae sus datos pero sí afecta a un tren, se
+           construyen del propio tren: ninguna tarjeta sin subtítulo.   */
+        const conDatos = inc.datos || (inc.tren !== undefined ? datosDeTren(g, g.trenes.find((t) => t.i === inc.tren)) : null);
+        /* Algunos generadores devuelven null cuando su opción no aplica —el
+           desacople, sin ir más lejos, solo existe en composición doble—. Se
+           filtran aquí, que es el punto por el que pasan todas: con una línea
+           que circula en sencillo, ese nulo llegaba a la pantalla y la
+           tumbaba.                                                       */
+        const limpias = (inc.opciones || []).filter(Boolean);
+        g.cola.push({ tipo: "inc", linea: g.linea, grav: GRAVEDAD_FAMILIA[def.id] || "grave", ...inc, opciones: limpias, datos: conDatos });
         g.incCount += 1;
         g.incEspera = SEPARACION_MIN;
         log(g, "bad", `Incidencia: ${inc.titulo}.`);
@@ -3925,7 +5967,7 @@ function cerrarDerivaMaq(g, t) {
     t.acum.maquinista = 0;
     return;
   }
-  const m = t.maq ? g.personal.find((x) => x.id === t.maq) : null;
+  const m = t.maq ? maqDe(g, t) : null;
   apunta(g, t, `marcha de ${m ? m.nombre : "el maquinista"}`, v);
   t.acum.maquinista = 0;
 }
@@ -3952,6 +5994,8 @@ function ejecutarRelevo(g, t, cab, forzarReserva = false) {
       tren: t.i,
       tipo: "aviso",
       titulo: `Sin relevo en ${cab}`,
+      lugar: cab,
+      datos: datosDeTren(g, t),
       texto: `El ${numeroTren(t, g.reloj)} ha llegado a ${cab} para el relevo y el maquinista nominal no está disponible. Cada minuto retenido es retraso.`,
       opciones: [
         hayReserva
@@ -3965,7 +6009,7 @@ function ejecutarRelevo(g, t, cab, forzarReserva = false) {
   }
 
   const entra = pool.sort((a, b) => margenDe(b) - margenDe(a))[0];
-  const sale = t.maq ? g.personal.find((x) => x.id === t.maq) : null;
+  const sale = t.maq ? maqDe(g, t) : null;
   if (sale) {
     sale.estado = "descanso";
     sale.descanso = DESCANSO;
@@ -4039,7 +6083,7 @@ function ejecutarCambio(g, t) {
     const otros = reservasEn(g, e.cab);
     const entra = otros.length ? otros.sort((a, b) => margenDe(b) - margenDe(a))[0] : null;
     if (entra) {
-      const sale = t.maq ? g.personal.find((x) => x.id === t.maq) : null;
+      const sale = t.maq ? maqDe(g, t) : null;
       if (sale) {
         sale.estado = "descanso";
         sale.descanso = DESCANSO;
@@ -4069,6 +6113,18 @@ function ejecutarCambio(g, t) {
 
 
 function suprimir(g, t, msg, enIdx = null, enVia = null) {
+  /* Una supresión es lo que peor se percibe: la gente que iba dentro y la que
+     esperaba se queda tirada. Pesa en la calidad y da conversación.    */
+  {
+    const aBordo = (t.pax || []).reduce((a2, b2) => a2 + b2, 0);
+    if (!g.cal) g.cal = { retraso: 0, agobio: 0, material: 0, roto: 0, viajeros: 0 };
+    g.cal.roto += aBordo * 8 + 400;
+    const sv = situacion(t, g.reloj);
+    const est = ESTACIONES[Math.max(0, Math.min(N - 1, Math.round(sv.idx)))];
+    const cuantos = 1 + Math.floor(Math.random() * (intensidad(g.reloj) > 0.75 ? 4 : 2));
+    for (let k = 0; k < cuantos; k++) publicar(g, Math.random() < 0.3 ? "duro" : "supresion", { L: g.linea, E: est ? est.n : "", T: numeroTren(t, g.reloj) });
+  }
+
   if (t.estado !== "suprimido") cerrarMarcha(g, t, enIdx !== null ? enIdx : Math.round(situacion(t, g.reloj).idx), "retirada");
   if (t.estado === "suprimido") return;
   const sAct = situacion(t, g.reloj);
@@ -4106,7 +6162,7 @@ function suprimir(g, t, msg, enIdx = null, enVia = null) {
   t.rotando = null;
   t.retenido = false;
   if (t.maq) {
-    const m = g.personal.find((x) => x.id === t.maq);
+    const m = maqDe(g, t);
     if (m) {
       m.estado = "descanso";
       m.descanso = DESCANSO;
@@ -4126,12 +6182,28 @@ function suprimir(g, t, msg, enIdx = null, enVia = null) {
    consola en vez de ignorarlo en silencio, que es lo que pasaba antes.    */
 const EFECTOS = [
   "abortarRotacion", "acompanante", "adelantar", "afect", "apartarPaso", "autorizar", "cab", "cambioMaterial",
-  "circularVacio", "coste", "corteVia", "desacoplar", "afectABordo", "afectAnden", "afectLinea", "calidad", "carteristas", "destinoVacio", "altercado", "repiteAlarma", "esperarCabecera", "averiaGrave", "fiabBaja", "gen", "limitacion", "moverApartado", "ordenarRotacion", "socorro",
+  "circularVacio", "coste", "corteVia", "cortarEstacion", "desacoplar", "afectABordo", "afectAnden", "afectLinea", "atls", "cabinaCambio", "calidad", "carteristas", "climaSinResolver", "degradada", "rescate", "destinoVacio", "altercado", "repiteAlarma", "esperarCabecera", "averiaGrave", "fiabBaja", "gen", "limitacion", "moverApartado", "ordenarRotacion", "socorro",
   "reforzar", "relevaReserva", "relevoInmediato", "reponer", "restriccion", "retener", "retirarCabecera",
   "retirarMaq", "retraso", "riesgo", "supresion", "suprimir",
 ];
 
 function aplicar(g, ef) {
+  /* La decisión se aplica sobre la línea de la incidencia, no sobre la que se
+     esté mirando: los índices de estación y los trenes son distintos en cada
+     una, y aplicarla en la equivocada rompe el estado.                 */
+  const vistaPrevia = g.linea || LINEAS_EN_JUEGO[0];
+  const deLinea = g.cola && g.cola[0] && g.cola[0].linea;
+  if (deLinea && deLinea !== vistaPrevia && g.porLinea && g.porLinea[deLinea]) {
+    guardarLinea(g, vistaPrevia);
+    entrarLinea(g, deLinea);
+  }
+
+  /* Resolver la avería es sacar la unidad del servicio: cambiarla, apartarla o
+     desacoplarla. Continuar NO la resuelve, y por eso se arrastra.      */
+  const resolver = (ids) => {
+    for (const av of g.averiasTurno || []) if (ids.includes(av.id)) av.resuelta = true;
+  };
+
   for (const k of Object.keys(ef || {}))
     if (!EFECTOS.includes(k)) console.warn(`[CGO] efecto desconocido: "${k}". Revisa el registro EFECTOS.`);
   const T = (i) => g.trenes.find((x) => x.i === i);
@@ -4141,6 +6213,7 @@ function aplicar(g, ef) {
     if (t) retrasar(g, t, ef.retraso.m, "la incidencia");
   }
   if (ef.desacoplar) {
+    if (ef.desacoplar.id) resolver([ef.desacoplar.id]);
     const t = T(ef.desacoplar.i);
     if (t && t.unidades.length > 1) {
       t.unidades = t.unidades.filter((u) => u.id !== ef.desacoplar.u);
@@ -4195,8 +6268,28 @@ function aplicar(g, ef) {
     const { i, idx, clave, cuando } = ef.reponer;
     const t = T(i);
     const comp = composicionesDisponibles(g, idx).find((c) => c.clave === clave);
-    const cab = ESTACIONES[idx].cab || ESTACIONES[idx].n;
-    const maq = reservasEn(g, cab).sort((a2, b2) => margenDe(b2) - margenDe(a2))[0];
+    const cab = cabeceraDe(idx);
+    /* Si no hay reserva en esa cabecera, se trae de otra: viaja como viajero en
+       el primer tren. Antes la reposición se caía en silencio por no tener a
+       nadie justo allí, aunque hubiera cinco a media hora de distancia. */
+    let maq = reservasEn(g, cab).sort((a2, b2) => margenDe(b2) - margenDe(a2))[0];
+    if (!maq) {
+      const libre = (m) => m.tipo === "reserva" && m.estado === "reserva" && !m.baja && !m.tren;
+      const libres = [...(g.personal || []).filter(libre), ...(g.reservaPersonal || []).filter(libre)];
+      maq = libres.sort((a2, b2) => margenDe(b2) - margenDe(a2))[0];
+      if (maq) {
+        /* Viaja como viajero en el primer tren que le lleve, y tarda lo que
+           tarde ese tren. Antes aparecía allí al instante.             */
+        const idxDesde = ESTACIONES.findIndex((e) => e.cab === maq.lugar);
+        const v = viajeMaquinista(g, idxDesde < 0 ? IDX_CHAMARTIN : idxDesde, idx);
+        log(
+          g,
+          "aviso",
+          `${maq.nombre} sale de ${maq.lugar} como viajero hacia ${cab} para tomar el servicio. Espera ${v.espera} min el tren y llega a las ${hhmm(g.reloj + v.total)}.`
+        );
+        maq.lugar = cab;
+      }
+    }
     if (t && comp && maq) {
       // el material sale del apartadero o del taller
       if (comp.desdeApartado)
@@ -4219,10 +6312,14 @@ function aplicar(g, ef) {
   if (ef.averiaGrave) {
     const t = T(ef.averiaGrave.i);
     if (t) {
+      resolver(t.unidades.map((u) => u.id));
       const dest = viasParaApartar(g, t)[0];
       if (dest) {
-        // se propone el primer sitio posible, pero el puesto de mando puede cambiarlo
+        /* Se propone el primer sitio posible y se abre el selector en el acto:
+           el botón para cambiarlo existía, pero estaba escondido en la lista de
+           trenes y había que saber que estaba ahí.                       */
         t.supresion = { idx: dest.idx, via: dest.vias[0], averiado: true };
+        g.pedirDestino = t.i;
         log(g, "aviso", `Tren ${numeroTren(t, g.reloj)}: termina recorrido en ${ESTACIONES[dest.idx].n}, ${dest.vias[0]}, donde quedará apartado por avería.`);
       } else {
         suprimir(g, t, `Tren ${numeroTren(t, g.reloj)}: sin apartadero por delante, se retira donde está.`);
@@ -4253,8 +6350,10 @@ function aplicar(g, ef) {
   if (ef.circularVacio) {
     const t = T(ef.circularVacio.i);
     if (t) {
+      resolver(t.unidades.map((u) => u.id));
       t.vacio = true; // bypass de puertas: no puede llevar viajeros
       t.pendienteApartar = true; // el puesto de mando elegirá estación y vía
+      g.pedirDestino = t.i; // y se le pregunta en el acto, sin ir a buscarlo
       log(g, "aviso", `Tren ${numeroTren(t, g.reloj)}: desaloja en la próxima parada y circula como material vacío. Falta decidir dónde se aparta.`);
     }
   }
@@ -4290,6 +6389,58 @@ function aplicar(g, ef) {
      hay decisiones que salen baratas en tiempo y caras en percepción, y sin
      este registro no hay forma de reflejarlo cuando se implemente.      */
   if (ef.calidad) g.kpi.calidad += ef.calidad;
+
+  /* Seguir el turno sin climatización: el ambiente a bordo se degrada y puede
+     acabar en altercado. Una sola comprobación, poco después.           */
+  /* Cambio de material con la cabina sin climatizar. Como en la realidad, el
+     maquinista puede negarse a seguir conduciendo en esas condiciones: la
+     probabilidad depende de su profesionalidad, en torno al 50 %.       */
+  if (ef.cabinaCambio) {
+    const { i, idx, conReserva } = ef.cabinaCambio;
+    const t = T(i);
+    const mq = t && t.maq ? maqDe(g, t) : null;
+    const pro = mq && Number.isFinite(mq.pro) ? mq.pro : 50;
+    const pNegar = Math.max(0.15, Math.min(0.85, 0.5 - (pro - 50) / 200));
+    if (Math.random() < pNegar) {
+      log(g, "bad", `${mq ? mq.nombre : "El maquinista"} se niega a continuar sin climatización en cabina.`);
+      g.cola.push({
+        tipo: "inc",
+        grav: "grave",
+        tren: i,
+        titulo: `El maquinista se niega a continuar · ${numeroTren(t, g.reloj)}`,
+        datos: datosDeTren(g, t),
+        lugar: ESTACIONES[Math.max(0, Math.min(N - 1, Math.round(situacion(t, g.reloj).idx)))].n,
+        texto: `${mq ? mq.nombre : "El maquinista"} no acepta conducir hasta el punto de cambio sin climatización en cabina. No queda más salida que dejar el material donde se pueda.`,
+        opciones: [
+          {
+            label: "El tren se queda inútil en la primera estación posible",
+            detalle: "Los viajeros bajan y el material queda apartado allí mismo",
+            ef: { averiaGrave: { i } },
+          },
+        ],
+      });
+    } else {
+      aplicar(g, { cambioMaterial: { i, idx, conReserva } });
+    }
+  }
+
+  /* Marcha degradada: el tren pierde un tiempo fijo cada tantos minutos de
+     marcha, y puede agravarse. Es distinto de la limitación por recorrido:
+     aquí la penalización se paga por tiempo circulado, no por viaje.    */
+  if (ef.degradada) {
+    const t = T(ef.degradada.i);
+    if (t) {
+      t.degradada = { min: ef.degradada.min, cada: ef.degradada.cada, agrava: ef.degradada.agrava || 0, desde: g.reloj, tipo: ef.degradada.tipo };
+      // se recuerda el grado para saber a cuál sube si se agrava
+      t.degradaGrado = ef.degradada.min >= 15 ? "grave" : "leve";
+      log(g, "aviso", `Tren ${numeroTren(t, g.reloj)}: continúa en marcha degradada, ${ef.degradada.min} min de pérdida cada ${ef.degradada.cada} min de marcha.`);
+    }
+  }
+
+  if (ef.climaSinResolver) {
+    const t = T(ef.climaSinResolver);
+    if (t) t.climaViciada = g.reloj + 10 + Math.floor(Math.random() * 26);
+  }
 
   if (ef.carteristas) {
     const t = T(ef.carteristas.i);
@@ -4327,15 +6478,59 @@ function aplicar(g, ef) {
     }
   }
 
+  /* Envío de ATLs. El tren queda inmovilizado y la vía cortada mientras los
+     mecánicos llegan; después se sabe si lo arreglan o hay que rescatarlo. */
+  if (ef.atls) {
+    const t = T(ef.atls.i);
+    if (t) {
+      const s2 = situacion(t, g.reloj);
+      const exacta = Math.max(0, Math.min(N - 1, s2.idx)); // sin redondear: define el tramo
+      const idx = Math.round(exacta);
+      const dir = s2.dir === "maniobra" ? "alcala" : s2.dir;
+      const tarda = 15 + Math.floor(Math.random() * 11);
+      t.inmovil = { desde: g.reloj, restante: tarda, atls: true, idx, dir };
+      t.detenido = { restante: tarda, motivo: "esperando a los ATLs", silencioso: true };
+      const rAtls = { id: `t${g.reloj}-${t.i}`, idx, m: 0, hasta: FIN + 120, txt: `Material averiado del ${numeroTren(t, g.reloj)}`, dir, tramo: limitesTramo(typeof exacta === "number" ? exacta : idx), tren: t.i };
+      g.restricciones = [...g.restricciones, rAtls];
+      propagarRestriccion(g, { ...rAtls, m: 3 }, (ESTACIONES[idx] || {}).n);
+      reaccionAvería(g, t, "atls", idx);
+      log(g, "bad", `Tren ${numeroTren(t, g.reloj)}: inmovilizado en ${ESTACIONES[idx].n}. ATLs en camino, ${tarda} min. Vía única en el tramo.`);
+    }
+  }
+
+  /* Rescate: la vía queda banalizada, el primer tren del mismo sentido hace
+     transbordo y hay que mandar material y maquinista a recogerlo.      */
+  if (ef.rescate) {
+    const t = T(ef.rescate.i);
+    if (t) {
+      const s2 = situacion(t, g.reloj);
+      const exacta = Math.max(0, Math.min(N - 1, s2.idx)); // sin redondear: define el tramo
+      const idx = Math.round(exacta);
+      const dir = s2.dir === "maniobra" ? "alcala" : s2.dir;
+      t.inmovil = { desde: g.reloj, restante: 25 + Math.floor(Math.random() * 21), rescate: true, idx, dir };
+      t.esperaTransbordo = { idx, dir }; // el primer tren del mismo sentido lo hará
+      if (!g.restricciones.some((r) => r.tren === t.i)) {
+        const nueva = { id: `a${g.reloj}-${t.i}`, idx, m: 0, hasta: FIN + 120, txt: `Material averiado del ${numeroTren(t, g.reloj)}`, dir, tramo: limitesTramo(typeof exacta === "number" ? exacta : idx), tren: t.i };
+        g.restricciones = [...g.restricciones, nueva];
+        // un tren clavado en una estación compartida estorba a todos
+        propagarRestriccion(g, { ...nueva, m: 3 }, (ESTACIONES[idx] || {}).n);
+        reaccionAvería(g, t, "rescate", idx);
+      }
+      g.pedirRescate = t.i; // el jugador elige material y maquinista
+      log(g, "bad", `Tren ${numeroTren(t, g.reloj)}: se organiza el rescate. Transbordo al primer tren del mismo sentido.`);
+    }
+  }
+
   if (ef.corteVia) {
     const t = T(ef.corteVia.i);
     if (t) {
       const s2 = situacion(t, g.reloj);
-      const idx = Math.min(N - 1, Math.round(s2.idx));
+      const exacta = Math.max(0, Math.min(N - 1, s2.idx));
+      const idx = Math.round(exacta);
       const dir = s2.dir === "maniobra" ? "alcala" : s2.dir;
       g.restricciones = [
         ...g.restricciones,
-        { idx, m: 0, hasta: FIN + 60, txt: `Material averiado del ${numeroTren(t, g.reloj)}`, dir, tramo: limitesTramo(idx) },
+        { id: `c${g.reloj}-${t.i}`, idx, m: 0, hasta: FIN + 60, txt: `Material averiado del ${numeroTren(t, g.reloj)}`, dir, tramo: limitesTramo(exacta), tren: t.i },
       ];
       suprimir(g, t, `Tren ${numeroTren(t, g.reloj)}: queda en vía por avería muy grave. Se corta la vía y se banaliza el tramo.`);
       t.enVia = true;
@@ -4361,6 +6556,7 @@ function aplicar(g, ef) {
     const { i, idx, conReserva } = ef.cambioMaterial;
     const t = T(i);
     if (t) {
+      resolver(t.unidades.map((u) => u.id)); // el material averiado sale del servicio
       t.cambio = { idx, conReserva, ordenado: g.reloj };
       log(g, "aviso", `Tren ${numeroTren(t, g.reloj)}: cambio de material ordenado en ${ESTACIONES[idx].n}.`);
     }
@@ -4424,12 +6620,55 @@ function aplicar(g, ef) {
       log(g, "aviso", `Tren ${numeroTren(t, g.reloj)}: quedará a la entrada de ${cab} hasta que haya vía.`);
     }
   }
+  /* Corte de estación: afecta a todas las líneas que paran allí, con una sola
+     decisión que las gobierna a todas.                                 */
+  if (ef.cortarEstacion) {
+    const { estacion, m: mm, dur, txt } = ef.cortarEstacion;
+    cortarEstacion(g, estacion, mm, dur, txt);
+    /* Un corte de estación lo pagan todas las líneas que paran allí, y en su
+       propia nota: si no, la incidencia se sentía en el retraso pero no en la
+       calidad de quien la sufre.                                        */
+    for (const idLin of lineasEnEstacion(g, estacion)) {
+      const trozo = idLin === (g.linea || LINEAS_EN_JUEGO[0]) ? g : g.porLinea[idLin];
+      if (!trozo.cal) trozo.cal = { retraso: 0, agobio: 0, material: 0, roto: 0, viajeros: 0 };
+      trozo.cal.roto += mm * 120;
+    }
+    const afectadas = lineasEnEstacion(g, estacion);
+    log(
+      g,
+      "bad",
+      `${txt} en ${estacion}: ${mm} min de penalización a cada paso hasta las ${hhmm(g.reloj + dur)}. Afecta a ${afectadas.join(" y ")}.`
+    );
+    // la gente de cada línea que pasa por allí lo sufre y lo cuenta
+    for (const id of afectadas) {
+      const cuantos = 1 + Math.floor(Math.random() * (intensidad(g.reloj) > 0.75 ? 4 : 2));
+      for (let k = 0; k < cuantos; k++) publicar(g, Math.random() < 0.25 ? "duro" : "retraso", { L: id, E: estacion, M: mm });
+    }
+  }
+
   if (ef.restriccion) {
     const { idx, m, dur, txt, bloqueaRot, dir } = ef.restriccion;
     const tramo = dir ? limitesTramo(idx) : null;
-    g.restricciones = [...g.restricciones.filter((x) => x.idx !== idx), { idx, m, hasta: g.reloj + dur, txt, bloqueaRot: !!bloqueaRot, dir: dir || null, tramo }];
-    if (tramo)
-      log(g, "bad", `Vía única entre ${ESTACIONES[tramo.a].n} y ${ESTACIONES[tramo.b].n}: los trenes se cruzarán en esas estaciones.`);
+    const nueva = { id: `r${g.reloj}-${idx}`, idx, m, hasta: g.reloj + dur, txt, bloqueaRot: !!bloqueaRot, dir: dir || null, tramo };
+    g.restricciones = [...g.restricciones.filter((x) => x.idx !== idx), nueva];
+    // si el punto lo comparten otras líneas, también lo sufren
+    propagarRestriccion(g, nueva, (ESTACIONES[idx] || {}).n);
+
+    /* La gente cuenta lo que ve: si es catenaria lo dice, si es una limitación
+       de velocidad también. El texto lo elige el propio suceso.        */
+    const est2 = ESTACIONES[idx];
+    const quePasa = /catenaria|enganch/i.test(txt) ? "catenaria" : /limitaci|velocidad|ltv/i.test(txt) ? "ltv" : null;
+    if (quePasa) {
+      const cuantos = 1 + Math.floor(Math.random() * (intensidad(g.reloj) > 0.75 ? 5 : 2));
+      for (let k = 0; k < cuantos; k++) publicar(g, Math.random() < 0.2 ? "duro" : quePasa, { L: g.linea, E: est2 ? est2.n : "", M: m });
+    }
+    if (tramo) {
+      /* El tramo puede venir de otra línea si la incidencia se encoló allí:
+         se resuelve con los nombres que existan, sin dar por hecho ninguno. */
+      const ea = ESTACIONES[tramo.a];
+      const eb = ESTACIONES[tramo.b];
+      if (ea && eb) log(g, "bad", `Vía única entre ${ea.n} y ${eb.n}: los trenes se cruzarán en esas estaciones.`);
+    }
     const sentido = dir === "alcala" ? " en sentido Alcalá" : dir === "pio" ? " en sentido Príncipe Pío" : "";
     log(g, "bad", `${txt}: ${m} min de penalización a cada paso${sentido}, hasta las ${hhmm(g.reloj + dur)}.`);
   }
@@ -4471,18 +6710,316 @@ function aplicar(g, ef) {
 
   g.cola = g.cola.slice(1);
   if (!g.cola.length) g.marcha = true;
+
+  /* Se guarda lo que acaba de cambiar en la línea sobre la que se ha aplicado.
+     Muchos efectos sustituyen el array entero —restricciones, trenes—, y al
+     entrar en esa línea el minuto siguiente se recuperaba la versión anterior
+     y la decisión del jugador se perdía sin dejar rastro.              */
+  guardarLinea(g, g.linea || vistaPrevia);
+
+  // se vuelve a la línea que estaba mirando el jugador
+  if (g.linea !== vistaPrevia && g.porLinea && g.porLinea[vistaPrevia]) {
+    entrarLinea(g, vistaPrevia);
+  }
   return g;
 }
 
-function clonar(p) {
+/* Acopla o desacopla material aparcado en una vía. Desacoplar deja las dos
+   unidades sueltas en la misma vía; acoplar une dos sueltas de la misma serie.
+   Lleva unos minutos de maniobra, y solo se hace con material parado.  */
+const MIN_MANIOBRA = 8;
+
+function maniobraApartado(g, idx, via, unir) {
+  const lista = (g.apartado || {})[idx];
+  if (!lista) return g;
+  const est = ESTACIONES[idx];
+  const donde = est ? est.n : "la estación";
+
+  if (unir) {
+    const sueltas = lista.filter((x) => x.via === via && x.unidades.length === 1 && !x.averiado);
+    if (sueltas.length < 2) return g;
+    const [a, b] = sueltas;
+    if (a.unidades[0].serie !== b.unidades[0].serie || !SERIES[a.unidades[0].serie].doble) return g;
+    g.apartado[idx] = [
+      ...lista.filter((x) => x !== a && x !== b),
+      { via, unidades: [...a.unidades, ...b.unidades], desde: g.reloj + MIN_MANIOBRA, averiado: false },
+    ];
+    log(g, "ok", `Maniobra en ${donde}, ${via}: se acopla ${a.unidades[0].id} con ${b.unidades[0].id}.`);
+    return g;
+  }
+
+  const doble = lista.find((x) => x.via === via && x.unidades.length > 1 && !x.averiado);
+  if (!doble) return g;
+  g.apartado[idx] = [
+    ...lista.filter((x) => x !== doble),
+    ...doble.unidades.map((u) => ({ via, unidades: [u], desde: g.reloj + MIN_MANIOBRA, averiado: false })),
+  ];
+  log(g, "ok", `Maniobra en ${donde}, ${via}: se desacopla ${doble.unidades.map((u) => u.id).join(" + ")}. Quedan disponibles por separado.`);
+  return g;
+}
+
+/* Lo que la gente publica en un minuto cualquiera, a partir de lo que está
+   pasando de verdad en la línea. El volumen sube con los afectados: se mira
+   cuánta gente sufre cada cosa y se sortea en consecuencia.            */
+/* Calidad del servicio: lo que sufre el viajero, no lo que marca el reloj. Se
+   acumula minuto a minuto y por línea, ponderando cada cosa por la gente que
+   la padece. Un retraso de diez minutos con el tren lleno pesa mucho más que
+   el mismo retraso con el tren vacío.
+
+   Se guardan los "puntos de sufrimiento" de cada componente y el total de
+   viajeros-minuto, para poder sacar la nota al cerrar.                 */
+/* Nota de 0 a 100 de una línea. Se reparte el castigo entre los cuatro
+   componentes y se resta de cien. Cada uno se normaliza por viajeros-minuto,
+   de modo que la nota no dependa del tamaño de la línea: la C-1, con 18.500
+   viajeros, se puede comparar con la C-7, que tiene 150.000.           */
+function notaCalidad(cal) {
+  if (!cal || !cal.viajeros) return { nota: 100, retraso: 0, agobio: 0, material: 0, roto: 0 };
+  const v = cal.viajeros;
+  /* Escalas calibradas midiendo turnos reales: un turno corriente acumula unos
+     9 puntos de retraso por viajero-minuto, 0,26 de agobio y décimas de
+     material. Cada componente tiene su tope para que ninguno se coma la nota
+     él solo, y el retraso pesa más que el resto porque es lo que más se
+     sufre.                                                              */
+  const pen = (x, escala, tope) => Math.min(tope, (x / v) * escala);
+  const retraso = pen(cal.retraso, 2.3, 45);
+  const agobio = pen(cal.agobio, 34, 25);
+  const material = pen(cal.material, 90, 20);
+  const roto = pen(cal.roto, 900, 25);
   return {
+    nota: Math.max(0, Math.round(100 - retraso - agobio - material - roto)),
+    retraso: Math.round(retraso),
+    agobio: Math.round(agobio),
+    material: Math.round(material),
+    roto: Math.round(roto),
+  };
+}
+
+/* Nota general: media de las líneas ponderada por viajeros. Si la C-7 mueve
+   ocho veces más gente, su nota debe pesar ocho veces más.             */
+function notaGeneral(g) {
+  const trozos = Object.entries(g.porLinea || {});
+  if (!trozos.length) return notaCalidad(g.cal).nota;
+  let suma = 0;
+  let peso = 0;
+  for (const [, t] of trozos) {
+    const v = (t.cal && t.cal.viajeros) || 0;
+    if (!v) continue;
+    suma += notaCalidad(t.cal).nota * v;
+    peso += v;
+  }
+  return peso ? Math.round(suma / peso) : 100;
+}
+
+function calidadDelMinuto(g, r) {
+  if (!g.cal) g.cal = { retraso: 0, agobio: 0, material: 0, roto: 0, viajeros: 0 };
+  const c = g.cal;
+
+  for (const t of g.trenes) {
+    if (t.estado === "suprimido") continue;
+    const sv = situacion(t, r);
+    if (sv.dir === "maniobra") continue;
+    const aBordo = t.pax.reduce((a, b) => a + b, 0);
+    if (!aBordo) continue;
+    c.viajeros += aBordo;
+
+    // cada minuto de retraso lo sufre toda la gente que va dentro
+    if (t.retraso > 2) c.retraso += aBordo * Math.min(t.retraso, 45);
+
+    // ir de pie apretado: pesa desde el 85 % de ocupación
+    const plazas = t.unidades.reduce((n, u) => n + u.plazas, 0) || 1;
+    const ocup = aBordo / plazas;
+    if (ocup > 0.85) c.agobio += aBordo * (ocup - 0.85) * 12;
+
+    // viajar en material degradado
+    if (t.climaViciada) c.material += aBordo * 1.2;
+    if (t.degradada) c.material += aBordo * 0.8;
+    // una avería heredada del turno anterior se sigue sufriendo
+    if (t.unidades.some((u) => u.sinReparar)) c.material += aBordo * 0.5;
+    // ir por la vía contraria en un tramo banalizado: lento y con parones
+    if (enViaContraria(g, t)) c.roto += aBordo * 0.6;
+  }
+
+  // quien se queda en el andén sufre el servicio sin ni siquiera viajar
+  for (let i = 0; i < N; i++) {
+    const a2 = g.andenes[i];
+    if (!a2) continue;
+    const esperando = a2.alcala + a2.pio;
+    if (esperando > 250) c.agobio += (esperando - 250) * 0.5;
+  }
+}
+
+/* Reacciones a una incidencia concreta. El número de mensajes sube con la
+   gente que va dentro del tren y con la hora: la misma avería a las ocho
+   genera un aluvión y a las once, dos mensajes.                        */
+function reaccionAvería(g, t, motivo, idx) {
+  const aBordo = (t.pax || []).reduce((a, b) => a + b, 0);
+  const est = ESTACIONES[Math.max(0, Math.min(N - 1, Math.round(idx)))];
+  const cuantos = Math.min(6, 1 + Math.floor((aBordo / 260) * (intensidad(g.reloj) > 0.75 ? 1.8 : 1)));
+  const datos = {
+    L: g.linea,
+    E: est ? est.n : "",
+    M: Math.round(t.retraso),
+    T: numeroTren(t, g.reloj),
+    D: situacion(t, g.reloj).dir === "alcala" ? ALCALA : PIO,
+  };
+  for (let k = 0; k < cuantos; k++) publicar(g, Math.random() < 0.2 ? "duro" : motivo, datos);
+}
+
+function reaccionesDelMinuto(g, r) {
+  const enPunta = intensidad(r) > 0.75;
+
+  for (const t of g.trenes) {
+    if (t.estado === "suprimido") continue;
+    const sv = situacion(t, r);
+    if (sv.dir === "maniobra") continue;
+    const aBordo = t.pax.reduce((a, b) => a + b, 0);
+    if (aBordo < 40) continue; // un tren casi vacío no genera conversación
+
+    const est = ESTACIONES[Math.max(0, Math.min(N - 1, Math.round(sv.idx)))];
+    const datos = { L: g.linea, E: est ? est.n : "", M: t.retraso, T: numeroTren(t, g.reloj) };
+
+    // la queja por retraso escala con los minutos y con la gente que los sufre
+    if (t.retraso >= 5) {
+      /* La probabilidad se mide contra la ocupación del propio tren, no contra
+         una cifra fija: con 900 de referencia, una línea corta como la C-1
+         —176 viajeros por tren— no llegaba a publicar nunca, aunque fuera con
+         retraso. Lo que enfada es ir apretado y tarde, no el número absoluto. */
+      const plazasT = t.unidades.reduce((n2, u) => n2 + u.plazas, 0) || 1;
+      const p = Math.min(0.5, (t.retraso / 60) * Math.max(aBordo / 900, (aBordo / plazasT) * 0.45) * (enPunta ? 1.6 : 1));
+      if (Math.random() < p) publicar(g, t.retraso >= 20 && Math.random() < 0.45 ? "duro" : "retraso", datos);
+    }
+
+    // ir apretado se nota a partir de ocupación alta
+    const plazas = t.unidades.reduce((n, u) => n + u.plazas, 0) || 1;
+    if (aBordo / plazas > 0.85 && Math.random() < 0.1) publicar(g, "aglomeracion", datos);
+
+    // material degradado: el calor es lo que más se comenta
+    if (t.climaViciada && Math.random() < 0.06) publicar(g, "calor", datos);
+    if (t.degradada && Math.random() < 0.03) publicar(g, "averia", datos);
+    if (enViaContraria(g, t) && Math.random() < 0.04) publicar(g, "vialunica", datos);
+  }
+
+  // andenes desbordados: quien no consigue subir también escribe
+  for (let i = 0; i < N; i++) {
+    const a2 = g.andenes[i];
+    if (!a2) continue;
+    const esperando = a2.alcala + a2.pio;
+    if (esperando > 400 && Math.random() < Math.min(0.25, esperando / 4000))
+      publicar(g, "aglomeracion", { L: g.linea, E: ESTACIONES[i].n });
+  }
+}
+
+/* Publica un mensaje de viajero. El volumen lo decide quien llama, según la
+   gente afectada: una avería en Atocha a las ocho genera un aluvión y la misma
+   a las once, tres mensajes.                                            */
+/* El tope guarda los últimos mensajes. Con varias líneas hace falta margen:
+   la C-7 publica cientos y, con un tope corto, los pocos de la C-1 quedaban
+   siempre desplazados y su muro salía vacío.                           */
+const TOPE_REACCIONES = 400;
+
+function publicar(g, motivo, datos) {
+  /* Uno de cada seis mensajes interpela a la cuenta oficial, sea cual sea el
+     motivo. Es lo que hace un usuario real cuando ya está harto: deja de
+     contarlo al aire y se lo dice a quien puede arreglarlo.            */
+  if (motivo !== "bien" && motivo !== "mencion" && Math.random() < 0.17) motivo = "mencion";
+  const lista = REACCIONES[motivo];
+  if (!lista || !lista.length) return;
+  const k = Math.floor(Math.random() * lista.length);
+  const pila = PILA_USUARIO[Math.floor(Math.random() * PILA_USUARIO.length)];
+  const ape = APELLIDO_USER[Math.floor(Math.random() * APELLIDO_USER.length)];
+  const apodo = APODOS[Math.floor(Math.random() * APODOS.length)];
+
+  /* El nombre de la línea lleva artículo: se dice "en la C-7", no "en C-7".
+     Se pone aquí y no en cada plantilla para que valga con cualquier línea
+     que se añada después. Si la frase empieza por ahí, se capitaliza al
+     final.                                                              */
+  const texto = lista[k]
+    .replace(/\{L\}/g, `la ${datos.L || g.linea || "línea"}`)
+    .replace(/\{E\}/g, datos.E || "la estación")
+    /* Nunca "0 minutos": al declararse una avería el retraso aún no ha
+       crecido, pero quien está dentro ya lleva un rato parado. Se toma un
+       mínimo de dos, que es lo que percibe el viajero.                 */
+    .replace(/\{M\}/g, datos.M !== undefined ? Math.max(2, Math.round(datos.M)) : 2 + Math.floor(Math.random() * 4))
+    .replace(/\{H\}/g, hhmm(g.reloj))
+    .replace(/\{T\}/g, datos.T || "tren")
+    .replace(/\{D\}/g, datos.D || "");
+
+  /* Limpieza final: una variable sin valor dejaba huecos y dobles espacios
+     ("El pantógrafo del  ha enganchado"). Se compactan y se ajusta la
+     mayúscula inicial, porque la frase puede empezar por la línea.     */
+  const texto2 = texto
+    // "de la la C-7": el artículo lo pone la sustitución, no la plantilla
+    .replace(/\b(la|el|los|las)\s+la\s+(C-\d)/gi, "$1 $2")
+    .replace(/\s{2,}/g, " ")
+    .replace(/\s+([.,])/g, "$1")
+    .trim();
+  const texto3 = texto2.charAt(0).toUpperCase() + texto2.slice(1);
+
+  /* Los alias de verdad tienen formas muy distintas: unos son el nombre y un
+     número, otros el apellido entero, otros llevan guión bajo o punto. Con una
+     sola fórmula todos los usuarios se parecían entre sí.              */
+  const n = pila.toLowerCase();
+  const ap = ape.toLowerCase();
+  const formas = [
+    () => n + apodo,
+    () => n + ap,
+    () => n + "_" + ap,
+    () => n + "." + ap,
+    () => n + ap.slice(0, 3) + apodo,
+    () => n[0] + ap + apodo,
+    () => n + "_" + apodo,
+    () => apodo + n,
+    () => n + ap[0] + Math.floor(Math.random() * 90 + 10),
+    () => n + Math.floor(Math.random() * 9000 + 100),
+    () => ap + n[0],
+    () => "el" + n,
+    () => "la" + n,
+    () => n + "de" + apodo,
+  ];
+  const alias = formas[Math.floor(Math.random() * formas.length)]();
+  const msg = {
+    id: `${Math.round(g.reloj)}-${g.reacciones ? g.reacciones.length : 0}-${k}`,
+    min: g.reloj,
+    nombre: `${pila} ${ape}`,
+    alias: alias.normalize("NFD").replace(/[\u0300-\u036f]/g, ""),
+    iniciales: (pila[0] + ape[0]).toUpperCase(),
+    color: COLOR_AVATAR[(pila.charCodeAt(0) + ape.charCodeAt(0)) % COLOR_AVATAR.length],
+    texto: texto3,
+    motivo,
+    linea: datos.L || g.linea,
+    // la indignación se comparte más que el elogio
+    likes: motivo === "bien" ? Math.floor(Math.random() * 12) : Math.floor(Math.random() * 90),
+    rt: motivo === "bien" ? Math.floor(Math.random() * 3) : Math.floor(Math.random() * 25),
+  };
+  g.reacciones = [...(g.reacciones || []), msg].slice(-TOPE_REACCIONES);
+}
+
+function clonar(p) {
+  /* El estado de las demás líneas también se copia: si se compartiera, un
+     cambio en el turno actual alcanzaría a la partida anterior.        */
+  const porLinea = {};
+  for (const [id, t] of Object.entries(p.porLinea || {}))
+    porLinea[id] = {
+      ...t,
+      trenes: (t.trenes || []).map((x) => ({ ...x, unidades: (x.unidades || []).map((u) => ({ ...u })), pax: [...(x.pax || [])] })),
+      personal: (t.personal || []).map((m) => ({ ...m })),
+      andenes: (t.andenes || []).map((a2) => ({ ...a2 })),
+      restricciones: (t.restricciones || []).map((x) => ({ ...x })),
+    };
+
+  const copia = {
     ...p,
-    trenes: p.trenes.map((t) => ({ ...t, unidades: t.unidades.map((u) => ({ ...u })), pax: [...t.pax], hist: [...t.hist], marchas: [...(t.marchas || [])], cuadroRelevos: [...(t.cuadroRelevos || [])], acum: { ...t.acum } })),
+    porLinea,
+    trenes: p.trenes.map((t) => ({ ...t, unidades: t.unidades.map((u) => ({ ...u })), pax: [...t.pax], hist: [...t.hist], marchas: [...(t.marchas || [])], cuadroRelevos: [...(t.cuadroRelevos || [])], traza: t.traza || [], acum: { ...t.acum } })),
     personal: p.personal.map((m) => ({ ...m })),
     kpi: { ...p.kpi },
     reserva: p.reserva.map((u) => ({ ...u })),
     cola: [...p.cola],
     restricciones: p.restricciones.map((x) => ({ ...x })),
+    reparadas: [...(p.reparadas || [])],
+    estad: p.estad
+      ? { muestras: p.estad.muestras, suben: p.estad.suben, bajan: p.estad.bajan, esperaMax: p.estad.esperaMax }
+      : { muestras: [], suben: new Array(N).fill(0), bajan: new Array(N).fill(0), esperaMax: new Array(N).fill(0) },
     turno: p.turno,
     turnoN: p.turnoN,
     retirada: p.retirada,
@@ -4493,11 +7030,27 @@ function clonar(p) {
     desg: { ...p.desg },
     andenes: p.andenes.map((x) => ({ ...x })),
     apartado: Object.fromEntries(Object.entries(p.apartado).map(([k, v]) => [k, v.map((x) => ({ ...x }))])),
-  };
+  }
+
+  /* La línea que se está mirando queda copiada dos veces: en el primer nivel y
+     dentro de porLinea. Si son copias distintas, lo que se anota en una se
+     pierde al entrar en la otra, y era lo que dejaba sin efecto el suavizado
+     del retraso: los trenes retrocedían de golpe en vez de aflojar la marcha.
+     Se hace que ambas apunten a los mismos objetos.                     */
+  const act = p.linea || LINEAS_EN_JUEGO[0];
+  if (copia.porLinea[act]) for (const k of CAMPOS_LINEA) copia.porLinea[act][k] = copia[k];
+
+  return copia;;
 }
 
 function avanzar(prev, dt) {
-  let g = clonar(prev);
+  /* La mayoría de los ticks solo mueven el reloj: no hace falta copiar en
+     profundidad los trenes, el personal y los andenes de todas las líneas. Con
+     varias en juego eso son más de cien objetos por fotograma, y a diecisiete
+     fotogramas por segundo es lo que hacía que los trenes se vieran a saltos.
+     Solo se clona a fondo cuando de verdad va a transcurrir un minuto.  */
+  const hayMinuto = Math.floor(prev.reloj + dt) > prev.ultimoMin;
+  let g = hayMinuto ? clonar(prev) : { ...prev };
   g.reloj = prev.reloj + dt;
   let guard = 0;
   while (Math.floor(g.reloj) > g.ultimoMin && guard++ < 90) {
@@ -4586,6 +7139,32 @@ export default function CGOC7() {
   }, [confirmacion]);
   const [cerrarPartida, setCerrarPartida] = useState(false);
   const [ajustes, setAjustes] = useState(false);
+
+  /* Cuando una decisión deja un tren pendiente de saber dónde se aparta, se
+     abre el selector en el acto. Antes había que ir a la lista de trenes y
+     encontrar el botón, así que en la práctica no se elegía nada.       */
+  useEffect(() => {
+    if (!g || g.pedirDestino === null || g.pedirDestino === undefined) return;
+    const i = g.pedirDestino;
+    // el reloj se para igual que con una incidencia: es una decisión, no un aviso
+    setG((p) => (p ? { ...p, pedirDestino: null, marcha: false } : p));
+    setApartaderoDe(i);
+  }, [g && g.pedirDestino]);
+  const [analisis, setAnalisis] = useState(false);
+  const [calidad, setCalidad] = useState(false);
+  // mensajes publicados desde la última vez que se abrió la pantalla
+  const [leidos, setLeidos] = useState(0);
+  const sinLeer = Math.max(0, ((g && g.reacciones) || []).length - leidos);
+
+  /* Las constantes globales —estaciones, extremos, ciclo— pertenecen a la
+     línea que el motor fijó por última vez. Si el estado que se va a dibujar
+     es de otra, hay que fijarla antes: si no, se pintan las estaciones de una
+     línea con los andenes de otra y falla al leer datos que no existen. */
+  if (g && g.linea && g.linea !== LINEA) fijarLinea(g.linea);
+  /* Modo de pruebas: interruptor en Ajustes. Permite lanzar cualquier
+     incidencia con el grado que se quiera. Al activarlo, el turno deja de
+     guardarse y no toca la campaña: se descarta al salir.               */
+  const [pruebas, setPruebas] = useState(false);
   /* El tema sigue al sistema salvo que se elija a mano. Se guarda aparte de la
      partida: es una preferencia del jugador, no del turno.              */
   const [tema, setTema] = useState(() => {
@@ -4677,12 +7256,13 @@ export default function CGOC7() {
      escritura es SÍNCRONA: bloquea el hilo mientras dura. Estaba enganchada al
      cambio de pestaña, así que cada vez que se pulsaba un menú se pagaba la
      escritura. Ahora va por su cuenta, con su propio reloj.             */
+  // en pruebas no se guarda nada: el turno se descarta al salir
   const estadoVivo = useRef(null);
   estadoVivo.current = { g, modo, tab };
   useEffect(() => {
     const iv = setInterval(() => {
       const v = estadoVivo.current;
-      if (v && v.g) guardarPartida(v.g, v.modo, v.tab);
+      if (v && v.g && !pruebas) guardarPartida(v.g, v.modo, v.tab);
     }, 8000);
     return () => clearInterval(iv);
   }, []);
@@ -4694,7 +7274,12 @@ export default function CGOC7() {
        se mueve nada de forma continua, y refrescar cientos de elementos varias
        veces por segundo dejaba el hilo ocupado: cada toque esperaba a que
        terminara el redibujado y el cambio de menú se notaba lento.       */
-    const paso = tab === "mapa" || g.vel >= 10 ? 100 : 500;
+    /* En el mapa hace falta paso fino para que los trenes no vayan a saltos.
+       Y cuanto más corta es la línea, más deprisa cruzan la pantalla: una
+       circulación de la C-1 recorre el mapa entero en quince minutos, así que
+       necesita todavía más fotogramas que la C-7 para verse fluida.    */
+    const enMapa = tab === "mapa";
+    const paso = enMapa ? 60 : g.vel >= 10 ? 100 : 500;
     const iv = setInterval(() => setG((p) => (p && p.marcha && !p.cola.length && !p.fin ? avanzar(p, (paso / 1000) * p.vel) : p)), paso);
     return () => clearInterval(iv);
   }, [g && g.marcha, g && g.vel, g && g.fin, g && g.cola.length, tab]);
@@ -4735,7 +7320,10 @@ export default function CGOC7() {
           setAsig(initAsignacion());
           setPantalla("asignacion");
         }}
-        empezar={(idTurno) => {
+        empezar={(idTurno, lineasElegidas) => {
+          // las líneas elegidas mandan sobre las de por defecto
+          if (lineasElegidas && lineasElegidas.length) LINEAS_EN_JUEGO = [...lineasElegidas];
+          fijarLinea(LINEAS_EN_JUEGO[0]); // el material se propone para la línea principal
           if (modo === "rapida") {
             fijarTurno(idTurno);
             setAsig(idTurno === "manana" ? initAsignacion() : propuestaTaller(null));
@@ -4839,7 +7427,7 @@ export default function CGOC7() {
 
         <button
           onClick={() => {
-            if (modo === "campana") {
+            if (modo === "campana" && !pruebas) {
               // el turno se cierra y todo pasa al siguiente: material, desgaste y taller
               const sig = estadoTrasTurno(g, camp || campanaNueva());
               setCamp(sig);
@@ -4869,7 +7457,7 @@ export default function CGOC7() {
       <BarraDatos g={g} />
       <div style={{ height: "calc(42px + env(safe-area-inset-top))" }} />
 
-      <BarraMando g={g} setG={setG} tab={tab} setTab={setTab} setAjustes={setAjustes} />
+      <BarraMando g={g} setG={setG} tab={tab} setTab={setTab} setAjustes={setAjustes} setAnalisis={setAnalisis} setCalidad={setCalidad} sinLeer={sinLeer} />
 
       {tab === "trenes" && <Trenes g={g} verEnMapa={(n) => { saltarSubida.current = true; setFocoTren(n); setTab("mapa"); }} setRotarDe={setRotarDe} setTrenSel={setTrenSel} setVolverA={setVolverA} setApartarDe={setApartarDe} setSuprimirDe={setSuprimirDe} setReponerDe={setReponerDe} setApartaderoDe={setApartaderoDe} setUnidadSel={setUnidadSel} />}
       {tab === "personal" && <Personal g={g} />}
@@ -4900,7 +7488,18 @@ export default function CGOC7() {
       {apartarDe !== null && <SelectorApartado g={g} setG={setG} i={apartarDe} close={() => setApartarDe(null)} />}
       {suprimirDe !== null && <SelectorSupresion g={g} setG={setG} i={suprimirDe} close={() => setSuprimirDe(null)} />}
       {reponerDe !== null && <SelectorReposicion g={g} setG={setG} i={reponerDe} close={() => setReponerDe(null)} />}
-      {apartaderoDe !== null && <SelectorApartadero g={g} setG={setG} i={apartaderoDe} close={() => setApartaderoDe(null)} />}
+      {apartaderoDe !== null && (
+        <SelectorApartadero
+          g={g}
+          setG={setG}
+          i={apartaderoDe}
+          close={() => {
+            setApartaderoDe(null);
+            // se reanuda al decidir, igual que al resolver una incidencia
+            setG((p) => (p && !p.cola.length && !p.fin ? { ...p, marcha: true } : p));
+          }}
+        />
+      )}
       {/* confirmación breve tras guardar, sin interrumpir la partida */}
       {confirmacion && (
         <div
@@ -4908,6 +7507,57 @@ export default function CGOC7() {
           style={{ position: "fixed", left: 0, right: 0, bottom: 96, display: "flex", justifyContent: "center", zIndex: 60, pointerEvents: "auto" }}
         >
           <div style={{ ...ST.card, boxShadow: SOMBRA.elevado, padding: "10px 16px", maxWidth: 460, margin: "0 12px", fontSize: T.base, lineHeight: 1.4 }}>{confirmacion}</div>
+        </div>
+      )}
+
+      {/* Análisis: pantalla completa, porque los gráficos necesitan el alto
+          entero y se consultan con calma, no de reojo.                  */}
+      {analisis && (
+        <div style={{ position: "fixed", inset: 0, background: P.ground, zIndex: 71, overflowY: "auto", animation: "cgo-fondo .18s ease-out" }}>
+          <div style={{ maxWidth: 540, margin: "0 auto", padding: "calc(12px + env(safe-area-inset-top)) 12px calc(24px + env(safe-area-inset-bottom))" }}>
+            <div style={{ display: "flex", alignItems: "flex-start", gap: 8, marginBottom: 12 }}>
+              <div style={{ flex: 1 }}>
+                <div style={ST.eyebrow}>Análisis del turno</div>
+                <h1 style={{ fontSize: T.titulo, fontWeight: 700, letterSpacing: -0.6, margin: "4px 0 0" }}>
+                  {g.turnoN} · {hhmm(INICIO)} a {hhmm(g.reloj)}
+                </h1>
+              </div>
+              <button
+                onClick={() => setAnalisis(false)}
+                style={{ border: `1px solid ${P.rule}`, background: P.surface, color: P.ink, borderRadius: R.normal, padding: "7px 12px", fontFamily: "inherit", fontSize: T.aux, fontWeight: 600, cursor: "pointer", flexShrink: 0 }}
+              >
+                Cerrar
+              </button>
+            </div>
+            <Analisis g={g} camp={modo === "campana" ? camp : null} />
+          </div>
+        </div>
+      )}
+
+      {/* Calidad del servicio: la nota del turno y lo que publican los
+          viajeros. Misma envoltura que el análisis.                    */}
+      {calidad && (
+        <div style={{ position: "fixed", inset: 0, background: P.ground, zIndex: 71, overflowY: "auto", animation: "cgo-fondo .18s ease-out" }}>
+          <div style={{ maxWidth: 540, margin: "0 auto", padding: "calc(12px + env(safe-area-inset-top)) 12px calc(24px + env(safe-area-inset-bottom))" }}>
+            <div style={{ display: "flex", alignItems: "flex-start", gap: 8, marginBottom: 12 }}>
+              <div style={{ flex: 1 }}>
+                <div style={ST.eyebrow}>Calidad del servicio</div>
+                <h1 style={{ fontSize: T.titulo, fontWeight: 700, letterSpacing: -0.6, margin: "4px 0 0" }}>
+                  {g.turnoN} · {hhmm(INICIO)} a {hhmm(g.reloj)}
+                </h1>
+              </div>
+              <button
+                onClick={() => {
+                  setCalidad(false);
+                  setLeidos((g.reacciones || []).length);
+                }}
+                style={{ border: `1px solid ${P.rule}`, background: P.surface, color: P.ink, borderRadius: R.normal, padding: "7px 12px", fontFamily: "inherit", fontSize: T.aux, fontWeight: 600, cursor: "pointer", flexShrink: 0 }}
+              >
+                Cerrar
+              </button>
+            </div>
+            <Calidad g={g} camp={modo === "campana" ? camp : null} />
+          </div>
         </div>
       )}
 
@@ -4956,6 +7606,71 @@ export default function CGOC7() {
             <div style={{ fontSize: T.aux, color: P.muted, marginTop: -14, marginBottom: 20, lineHeight: 1.45 }}>
               En automático sigue lo que tenga configurado el dispositivo.
             </div>
+
+            {/* Modo de pruebas: apagado por defecto. Al encenderlo, este turno
+                queda descartado y no se guarda nada.                    */}
+            <div style={{ ...ST.eyebrow, marginBottom: 8 }}>Pruebas</div>
+            <button
+              onClick={() => setPruebas(!pruebas)}
+              style={{
+                width: "100%",
+                display: "flex",
+                alignItems: "center",
+                gap: 10,
+                background: pruebas ? P.info : P.surface,
+                color: pruebas ? P.blanco : P.ink,
+                border: `1px solid ${pruebas ? P.info : P.rule}`,
+                borderRadius: R.normal,
+                padding: 12,
+                fontFamily: "inherit",
+                fontWeight: 700,
+                fontSize: T.base,
+                cursor: "pointer",
+                marginBottom: 8,
+                textAlign: "left",
+              }}
+            >
+              <span style={{ width: 34, height: 20, borderRadius: R.pastilla, background: pruebas ? P.blanco : P.rule, flexShrink: 0, position: "relative" }}>
+                <span
+                  style={{
+                    position: "absolute",
+                    top: 3,
+                    left: pruebas ? 17 : 3,
+                    width: 14,
+                    height: 14,
+                    borderRadius: R.pastilla,
+                    background: pruebas ? P.info : P.surface,
+                    transition: "left .18s ease-out",
+                  }}
+                />
+              </span>
+              Lanzar incidencias a voluntad
+            </button>
+            <div style={{ fontSize: T.aux, color: P.muted, lineHeight: 1.45, marginBottom: pruebas ? 12 : 20 }}>
+              {pruebas
+                ? "Este turno ya no se guardará ni contará para la campaña. Al salir se descarta."
+                : "Permite provocar cualquier incidencia para verla en juego. El turno en el que se active no cuenta."}
+            </div>
+
+            {pruebas && (
+              <>
+                <PanelPruebas
+                  g={g}
+                  lanzar={(fam, av, gr, tren) => {
+                    setG((p) => {
+                      const n = clonar(p);
+                      const inc = lanzarPrueba(n, fam, av, gr, tren);
+                      if (inc) {
+                        n.cola = [...n.cola, inc];
+                        n.marcha = false;
+                      }
+                      return n;
+                    });
+                    setAjustes(false);
+                  }}
+                />
+              </>
+            )}
 
             <div style={{ ...ST.eyebrow, marginBottom: 8 }}>Partida</div>
             <button
@@ -5020,6 +7735,7 @@ export default function CGOC7() {
       {unidadSel && (
         <PerfilUnidad
           g={g}
+          camp={modo === "campana" ? camp : null}
           id={unidadSel}
           close={() => {
             setUnidadSel(null);
@@ -5058,6 +7774,7 @@ export default function CGOC7() {
             setVacioDe({ idx: estSel, via });
             setEstSel(null);
           }}
+          maniobrar={(idx, via, unir) => setG((p2) => maniobraApartado(clonar(p2), idx, via, unir))}
         />
       )}
       {trenSel !== null && (
@@ -5088,23 +7805,136 @@ export default function CGOC7() {
 
       {aviso && (
         <div style={{ position: "fixed", inset: 0, background: "rgba(10,14,17,.5)", animation: "cgo-fondo .18s ease-out", display: "flex", alignItems: "center", justifyContent: "center", padding: 16, zIndex: 70 }}>
-          <div style={{ ...ST.card, borderColor: aviso.tipo === "inc" ? P.alert : P.warn, borderWidth: 1.5, padding: 16, maxWidth: 460, width: "100%", maxHeight: "88vh", overflowY: "auto", boxShadow: SOMBRA.hoja, animation: "cgo-hoja .22s ease-out" }}>
-            <div style={{ ...ST.eyebrow, color: aviso.tipo === "inc" ? P.alert : P.warn }}>
-              {aviso.tipo === "inc" ? "Incidencia" : "Requiere decisión"} · {hhmm(g.reloj)}
-            </div>
-            <div style={{ fontSize: T.titulo, fontWeight: 700, letterSpacing: -0.4, margin: "4px 0 5px", lineHeight: 1.2 }}>{aviso.titulo}</div>
-            <div style={{ fontSize: T.alto, color: P.muted, lineHeight: 1.5, marginBottom: 12 }}>{aviso.texto}</div>
-            {aviso.opciones.map((o, i) => (
-              <button
-                key={i}
-                onClick={() => setG((p) => aplicar(clonar(p), o.ef))}
-                style={{ display: "block", width: "100%", textAlign: "left", background: P.surface, border: `1px solid ${P.rule}`, borderRadius: R.normal, padding: "11px 13px", marginBottom: 8, fontFamily: "inherit", cursor: "pointer", color: P.ink }}
+          {(() => {
+            const gr = GRADOS[aviso.grav] || GRADOS.grave;
+            return (
+              <div
+                style={{
+                  background: P.surface,
+                  /* Sin borde de color: la cabecera ya lleva el color y un filete
+                     claro alrededor solo ensuciaba el contorno.          */
+                  border: `1px solid ${P.rule}`,
+                  borderRadius: R.grande,
+                  overflow: "hidden",
+                  maxWidth: 460,
+                  width: "100%",
+                  maxHeight: "88vh",
+                  overflowY: "auto",
+                  boxShadow: SOMBRA.hoja,
+                  animation: "cgo-hoja .22s ease-out",
+                }}
               >
-                <div style={{ fontSize: T.alto, fontWeight: 600 }}>{o.label}</div>
-                <div style={{ fontSize: T.base, color: P.muted, marginTop: 2 }}>{o.detalle}</div>
-              </button>
-            ))}
-          </div>
+                {/* Cabecera maciza del color de la gravedad: qué, cuándo y dónde
+                    en una sola línea, antes de leer una palabra del relato. */}
+                <div style={{ background: gr.franja(), padding: "10px 16px", display: "flex", alignItems: "center", gap: 6, fontSize: T.menor, letterSpacing: 1.6, textTransform: "uppercase", fontWeight: 700, color: P.blanco }}>
+                  {/* pastilla de cada línea afectada: con varias en juego hay
+                      que saber de quién es la incidencia de un vistazo */}
+                  {LINEAS_EN_JUEGO.length > 1 &&
+                    lineasAfectadas(g, aviso).map((id) => (
+                      <span
+                        key={id}
+                        style={{
+                          // color propio de la línea, con el número en blanco
+                          background: LIN[id],
+                          color: P.blanco,
+                          border: `1px solid ${P.blanco}`,
+                          borderRadius: R.menudo,
+                          padding: "1px 5px",
+                          fontSize: T.micro,
+                          fontWeight: 800,
+                          letterSpacing: 0.4,
+                          flexShrink: 0,
+                        }}
+                      >
+                        {id}
+                      </span>
+                    ))}
+                  <span style={{ flexShrink: 0 }}>{aviso.tipo === "inc" ? gr.n : "Requiere decisión"}</span>
+                  <span style={{ opacity: 0.55 }}>·</span>
+                  <span style={{ fontFamily: MONO, letterSpacing: 0.4, flexShrink: 0 }}>{hhmm(g.reloj)}</span>
+                  {aviso.lugar && (
+                    <>
+                      <span style={{ opacity: 0.55 }}>·</span>
+                      <span style={{ whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis", minWidth: 0 }}>{aviso.lugar}</span>
+                    </>
+                  )}
+                </div>
+
+                <div style={{ padding: 16 }}>
+                  {/* Título con el mismo estilo de titular que el resto del
+                      juego: cuerpo de título, grosor 700 y el interletrado
+                      cerrado que usan las demás pantallas.               */}
+                  <div style={{ fontSize: T.titulo, fontWeight: 700, letterSpacing: -0.5, lineHeight: 1.2, margin: 0 }}>{aviso.titulo}</div>
+
+                  {/* Subtítulo: los datos del material, en caja alta y pequeño,
+                      justo debajo del título.                            */}
+                  {aviso.datos && (
+                    <div style={{ ...ST.eyebrow, letterSpacing: 0.9, marginTop: 4 }}>
+                      {aviso.datos.map((d, k) => (
+                        <span key={d.k}>
+                          {k > 0 && <span style={{ opacity: 0.5 }}> · </span>}
+                          {d.k === "Unidad" ? d.v : `${d.k} ${d.v}`}
+                        </span>
+                      ))}
+                    </div>
+                  )}
+
+                  <div style={{ fontSize: T.alto, color: P.ink, lineHeight: 1.55, margin: "12px 0 16px", whiteSpace: "pre-line" }}>{aviso.texto}</div>
+
+                  {/* Aviso expreso cuando el corte alcanza a otras líneas: la
+                      decisión que se tome les afecta también.           */}
+                  {(() => {
+                    const afectadas = lineasAfectadas(g, aviso);
+                    if (afectadas.length < 2) return null;
+                    const otras = afectadas.slice(1);
+                    return (
+                      <div style={{ ...ST.card, background: P.sunken, padding: "9px 11px", marginBottom: 16, fontSize: T.base, color: P.ink, lineHeight: 1.45 }}>
+                        Afecta también a {otras.map((id) => <strong key={id} style={{ color: LIN[id] }}>{id}</strong>).reduce((a2, b2) => [a2, " y ", b2])}, que
+                        {otras.length > 1 ? " pasan" : " pasa"} por este punto.
+                      </div>
+                    );
+                  })()}
+
+                  <div style={{ ...ST.eyebrow, marginBottom: 8 }}>Decisión</div>
+                  {aviso.opciones.map((o, i) => {
+                    const prev = previsionOpcion(o);
+                    return (
+                      <button
+                        key={i}
+                        onClick={() => setG((p) => aplicar(clonar(p), o.ef))}
+                        style={{
+                          display: "block",
+                          width: "100%",
+                          textAlign: "left",
+                          background: P.surface,
+                          border: `1px solid ${P.rule}`,
+                          // filete del color de la gravedad: marca que es la vía de salida
+                          borderLeft: `3px solid ${gr.col()}`,
+                          borderRadius: R.normal,
+                          padding: "12px 13px",
+                          marginBottom: 8,
+                          fontFamily: "inherit",
+                          cursor: "pointer",
+                          color: P.ink,
+                        }}
+                      >
+                        <div style={{ display: "flex", alignItems: "baseline", gap: 8 }}>
+                          <span style={{ fontSize: T.alto, fontWeight: 700, flex: 1, minWidth: 0, letterSpacing: -0.2 }}>{o.label}</span>
+                          {/* la previsión siempre visible: es lo que decide */}
+                          {prev && (
+                            <span style={{ fontSize: T.micro, fontWeight: 700, fontFamily: MONO, color: P.blanco, background: gr.franja(), borderRadius: R.menudo, padding: "3px 7px", whiteSpace: "nowrap", flexShrink: 0 }}>
+                              {prev}
+                            </span>
+                          )}
+                        </div>
+                        <div style={{ fontSize: T.base, color: P.muted, marginTop: 4, lineHeight: 1.45 }}>{o.detalle}</div>
+                      </button>
+                    );
+                  })}
+                </div>
+              </div>
+            );
+          })()}
         </div>
       )}
     </div>
@@ -5497,6 +8327,8 @@ function Logo({ pequeno }) {
 function Seleccion({ modo, camp, cargando, atras, empezar, nueva }) {
   const enCurso = camp && camp.acum.turnos > 0;
   const [turno, setTurno] = useState("manana");
+  // líneas que el jugador va a llevar en este turno; al menos una
+  const [elegidas, setElegidas] = useState(["C-7"]);
   const defT = TURNOS.find((x) => x.id === (modo === "campana" && camp ? camp.turno : turno)) || TURNOS[0];
 
   return (
@@ -5511,30 +8343,38 @@ function Seleccion({ modo, camp, cargando, atras, empezar, nueva }) {
 
       <Logo pequeno />
 
-      <div style={{ ...ST.eyebrow, marginBottom: 8 }}>Línea</div>
-      <div style={{ display: "flex", flexWrap: "wrap", gap: 8, marginBottom: 8 }}>
-        {LINEAS_NUCLEO.map((l) => (
-          <span
-            key={l.id}
-            title={l.n}
-            style={{
-              fontSize: T.base,
-              fontWeight: 700,
-              fontFamily: MONO,
-              color: P.blanco,
-              background: LIN[l.id],
-              opacity: l.id === LINEA ? 1 : 0.28,
-              borderRadius: R.normal,
-              padding: "5px 11px",
-            }}
-          >
-            {l.id}
-          </span>
-        ))}
+      {/* Líneas del turno. Se puede llevar una sola o varias a la vez: cada
+          una añade sus circulaciones y su personal.                    */}
+      <div style={{ ...ST.eyebrow, marginBottom: 8 }}>Líneas a gestionar</div>
+      <div style={{ display: "flex", gap: 6, flexWrap: "wrap", marginBottom: 8 }}>
+        {LINEAS_NUCLEO.map((l) => {
+          const disponible = !!LINEAS[l.id];
+          const sel = elegidas.includes(l.id);
+          return (
+            <button
+              key={l.id}
+              disabled={!disponible}
+              onClick={() => setElegidas(sel ? elegidas.filter((x) => x !== l.id) : [...elegidas, l.id])}
+              title={disponible ? l.n : `${l.n} · próximamente`}
+              style={{
+                ...PASTILLA,
+                display: "flex",
+                background: sel ? LIN[l.id] : P.surface,
+                color: sel ? P.blanco : P.ink,
+                border: `2px solid ${sel ? LIN[l.id] : P.rule}`,
+                opacity: disponible ? 1 : 0.28,
+                cursor: disponible ? "pointer" : "not-allowed",
+              }}
+            >
+              {l.id}
+            </button>
+          );
+        })}
       </div>
-      <div style={{ fontSize: T.aux, color: P.muted, marginBottom: 24, lineHeight: 1.45 }}>
-        Disponible la <strong style={{ color: P.ink }}>{LINEA}</strong>, {LINEAS_NUCLEO.find((l) => l.id === LINEA).n}. El resto del núcleo llegará más
-        adelante.
+      <div style={{ fontSize: T.aux, color: P.muted, marginBottom: 20, lineHeight: 1.45 }}>
+        {elegidas.length > 1
+          ? `${elegidas.length} líneas a la vez, ${elegidas.reduce((n2, x) => n2 + (LINEAS[x] ? Math.round((LINEAS[x].recorrido * 2 + LINEAS[x].invA + LINEAS[x].invB) / LINEAS[x].intervalo) : 0), 0)} circulaciones en total.`
+          : "Puedes llevar más de una línea a la vez. Comparten taller, material y libro de incidencias."}
       </div>
 
       {modo === "rapida" ? (
@@ -5593,7 +8433,7 @@ function Seleccion({ modo, camp, cargando, atras, empezar, nueva }) {
       )}
 
       <button
-        onClick={() => empezar(modo === "rapida" ? turno : null)}
+        onClick={() => empezar(modo === "rapida" ? turno : null, elegidas)}
         disabled={cargando}
         style={{ ...ST.btn(true), width: "100%", padding: "15px 0", fontSize: T.alto, fontFamily: "inherit", letterSpacing: 0.3, opacity: cargando ? 0.5 : 1 }}
       >
@@ -5727,11 +8567,15 @@ function Relevo({ asig, camp, empezar }) {
           <div style={ST.eyebrow}>Material apartado</div>
           <div style={{ ...ST.card, padding: 12, margin: "6px 0 10px" }}>
             {apartadas.map(([clv, par], k) => {
-              const [idx, via] = clv.split("|");
+              /* La clave guarda el NOMBRE de la estación desde que el apartado
+                 es común a varias líneas. Se admite también el número por si
+                 llega de una partida guardada antes del cambio.        */
+              const [donde, via] = clv.split("|");
+              const est = Number.isFinite(Number(donde)) ? ESTACIONES[Number(donde)] : ESTACIONES.find((e) => e.n === donde);
               return (
                 <div key={clv} style={{ display: "flex", alignItems: "center", gap: 8, padding: "6px 10px", margin: "0 -12px", borderRadius: R.normal, background: fondoFila(k) }}>
                   <span style={{ fontSize: T.aux, flex: 1, minWidth: 0, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
-                    {ESTACIONES[idx].n} · {via}
+                    {(est || {}).n || donde} · {via}
                   </span>
                   <span style={{ fontSize: T.aux, fontFamily: MONO, color: P.muted, flexShrink: 0 }}>
                     {par.filter(Boolean).join(" + ")}
@@ -5751,33 +8595,160 @@ function Relevo({ asig, camp, empezar }) {
 }
 
 function Asignacion({ asig, setAsig, slotSel, setSlotSel, empezar, camp }) {
-  const usadas = new Set([...asig.slots.flat(), ...Object.values(asig.apart).flat()].filter(Boolean));
-  const listas = asig.slots.filter(slotCompleto).length;
-  const completo = listas === CIRCULACIONES;
+  /* Una pestaña por línea en juego. Las circulaciones son de cada una, pero el
+     material apartado es común: se deja en una vía y lo puede tomar cualquier
+     línea que pase por allí.                                            */
+  /* El apartadero es una pestaña más, junto a las líneas: el material aparcado
+     no pertenece a ninguna, está en una vía y lo toma quien pase por allí. */
+  const [lineaSel, setLineaSel] = useState(LINEAS_EN_JUEGO[0]);
+  const verApartadero = lineaSel === "__apart";
+  /* Se fija la línea de la pestaña antes de dibujar: el número de
+     circulaciones, la demanda en punta, los kilómetros por turno y el material
+     admitido son constantes globales, y sin esto la pestaña de la C-7 se
+     dibujaba con los datos de la C-1.                                   */
+  if (LINEA !== lineaSel) fijarLinea(lineaSel);
+
+  /* Las circulaciones de la línea que se está viendo. Se guardan por línea en
+     asig.lineas; asig.slots sigue apuntando a la principal para que el resto
+     del juego no note el cambio.                                        */
+  if (!asig.lineas) asig.lineas = { [LINEAS_EN_JUEGO[0]]: asig.slots };
+  for (const id of LINEAS_EN_JUEGO) {
+    const L = LINEAS[id];
+    const n = Math.round((L.recorrido * 2 + L.invA + L.invB) / L.intervalo);
+    // si el número no cuadra con la línea, se rehace: pudo crearse con otra
+    if (!asig.lineas[id] || asig.lineas[id].length !== n) {
+      const previo = asig.lineas[id] || [];
+      asig.lineas[id] = Array.from({ length: n }, (_, k) => previo[k] || [null, null]);
+    }
+  }
+  /* En la pestaña del apartadero no hay línea seleccionada: se trabaja con la
+     principal para lo que necesite una, y lo propio de línea no se dibuja. */
+  const lineaBase = verApartadero ? LINEAS_EN_JUEGO[0] : lineaSel;
+  const slotsLinea = asig.lineas[lineaBase] || [];
+  const totalLinea = slotsLinea.length; // circulaciones de la línea que se ve
+  const ponSlots = (nuevos) => setAsig({ ...asig, lineas: { ...asig.lineas, [lineaSel]: nuevos }, slots: lineaSel === LINEAS_EN_JUEGO[0] ? nuevos : asig.slots });
+  // una unidad comprometida en cualquier línea ya no está disponible
+  const usadas = new Set([...Object.values(asig.lineas).flat(2), ...Object.values(asig.apart).flat()].filter(Boolean));
+  /* Se pasa la línea a mano: filter entrega el ÍNDICE como segundo argumento,
+     y ese índice acababa interpretándose como identificador de línea. Al no
+     existir ninguna línea "0", el juego daba por sencillas todas las
+     composiciones y las dobles constaban como incompletas.             */
+  const listas = slotsLinea.filter((par) => slotCompleto(par, lineaSel)).length;
+  // el turno se abre cuando TODAS las líneas están cubiertas
+  // cada línea se juzga con SUS reglas de composición
+  const completo = LINEAS_EN_JUEGO.every((id) => {
+    const propias = asig.lineas[id] || [];
+    return propias.length > 0 && propias.every((par) => slotCompleto(par, id));
+  });
   const uni = (id) => CATALOGO.find((u) => u.id === id);
   const plazasSlot = (par) => par.filter(Boolean).reduce((n, id) => n + uni(id).plazas, 0);
 
-  const lib = (s) => LIBRES_C7.filter((u) => u.serie === s).length;
+  // unidades libres de cada serie que esta línea puede usar
+  const lib = (s) => (LINEAS[lineaBase].series.includes(s) ? LIBRES_C7.filter((u) => u.serie === s).length : 0);
   const demPunta = demandaPorTren();
-  const cubiertas = asig.slots.filter((par) => slotCompleto(par) && plazasSlot(par) >= demPunta).length;
+  const cubiertas = slotsLinea.filter((par) => slotCompleto(par) && plazasSlot(par) >= demPunta).length;
 
   return (
     <div style={ST.wrap}>
       <Fonts />
-      <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 4 }}>
-        <span style={{ background: COLOR.rojo, color: P.blanco, fontSize: T.titulo, fontWeight: 700, padding: "2px 9px", borderRadius: R.normal }}>C-7</span>
+      <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 12 }}>
+        <span style={{ background: verApartadero ? P.solido : LIN[lineaSel], color: P.blanco, fontSize: T.titulo, fontWeight: 700, padding: "2px 9px", borderRadius: R.normal }}>{lineaSel}</span>
         <div style={{ lineHeight: 1.1 }}>
           <div style={{ fontSize: T.base, fontWeight: 700 }}>Asignación de material</div>
-          <div style={{ fontSize: T.aux, color: P.muted }}>Antes de abrir el turno de mañana</div>
+          <div style={{ fontSize: T.aux, color: P.muted }}>
+            {verApartadero
+              ? "Material estacionado, común a todas las líneas"
+              : `${(LINEAS[lineaSel].estaciones[0] || {}).n} – ${(LINEAS[lineaSel].estaciones[LINEAS[lineaSel].estaciones.length - 1] || {}).n}`}
+          </div>
         </div>
       </div>
 
+      {/* Una pestaña por línea, con las circulaciones que le faltan por cubrir.
+          El material apartado, en cambio, es común a todas.             */}
+      {LINEAS_EN_JUEGO.length > 1 && (
+        <div style={{ display: "flex", gap: 6, marginBottom: 12 }}>
+          {[...LINEAS_EN_JUEGO, "__apart"].map((id) => {
+            const sel = id === lineaSel;
+            if (id === "__apart") {
+              const n = Object.values(asig.apart).flat().filter(Boolean).length;
+              return (
+                <button
+                  key={id}
+                  onClick={() => setLineaSel(id)}
+                  style={{
+                    flex: 1,
+                    background: sel ? P.solido : P.surface,
+                    color: sel ? P.blanco : P.ink,
+                    border: `2px solid ${sel ? P.solido : P.rule}`,
+                    borderRadius: R.normal,
+                    padding: "8px 6px",
+                    fontFamily: "inherit",
+                    fontSize: T.base,
+                    fontWeight: 700,
+                    cursor: "pointer",
+                    lineHeight: 1.2,
+                  }}
+                >
+                  Apart.
+                  <span style={{ display: "block", fontSize: T.micro, fontWeight: 600, opacity: sel ? 0.85 : 0.6, fontFamily: MONO }}>
+                    {n} uds.
+                  </span>
+                </button>
+              );
+            }
+            const L = LINEAS[id];
+            /* El total sale de las circulaciones ya creadas para esa línea, no
+               de un cálculo aparte que podía no coincidir.             */
+            const propias = (asig.lineas && asig.lineas[id]) || [];
+            const n = propias.length || Math.round((L.recorrido * 2 + L.invA + L.invB) / L.intervalo);
+            const puestas = propias.filter((par) => slotCompleto(par, id)).length;
+            return (
+              <button
+                key={id}
+                onClick={() => setLineaSel(id)}
+                style={{
+                  flex: 1,
+                  background: sel ? LIN[id] : P.surface,
+                  color: sel ? P.blanco : P.ink,
+                  border: `2px solid ${sel ? LIN[id] : P.rule}`,
+                  borderRadius: R.normal,
+                  padding: "8px 6px",
+                  fontFamily: "inherit",
+                  fontSize: T.base,
+                  fontWeight: 700,
+                  cursor: "pointer",
+                  lineHeight: 1.2,
+                }}
+              >
+                {id}
+                <span style={{ display: "block", fontSize: T.micro, fontWeight: 600, opacity: sel ? 0.85 : 0.6, fontFamily: MONO }}>
+                  {puestas}/{n}
+                </span>
+              </button>
+            );
+          })}
+        </div>
+      )}
+
+      {/* El texto describe la línea que se está asignando: cada una admite su
+          material y tiene su propia demanda.                            */}
+      {!verApartadero && (
       <div style={{ ...ST.card, padding: 12, margin: "12px 0", fontSize: T.base, lineHeight: 1.5, color: P.muted }}>
-        {CIRCULACIONES} circulaciones. Las <strong style={{ color: P.ink }}>446 y 465</strong> circulan acopladas de dos en dos; la{" "}
-        <strong style={{ color: P.ink }}>450 de doble piso</strong> presta servicio en composición simple. La demanda en punta ronda los{" "}
-        <strong style={{ color: P.ink }}>{nf(demPunta)} viajeros</strong> a bordo por circulación. Vigila el{" "}
+        <strong style={{ color: P.ink }}>{slotsLinea.length} circulaciones</strong>
+        {LINEAS[lineaBase].dobles ? (
+          <>
+            . Las <strong style={{ color: P.ink }}>446 y 465</strong> circulan acopladas de dos en dos; la{" "}
+            <strong style={{ color: P.ink }}>450 de doble piso</strong> presta servicio en composición simple.
+          </>
+        ) : (
+          <>
+            , cubiertas con <strong style={{ color: P.ink }}>{LINEAS[lineaBase].series.join(" y ")}</strong> en composición sencilla.
+          </>
+        )}{" "}
+        La demanda en punta ronda los <strong style={{ color: P.ink }}>{nf(demPunta)} viajeros</strong> a bordo por circulación. Vigila el{" "}
         <strong style={{ color: P.ink }}>kilometraje hasta revisión</strong>: una unidad recorre unos {KM_TURNO} km en el turno.
       </div>
+      )}
 
       {(() => {
         const cortas = [...usadas].map(uni).filter((u) => u && !cubreTurno(u));
@@ -5790,7 +8761,7 @@ function Asignacion({ asig, setAsig, slotSel, setSlotSel, empezar, camp }) {
       })()}
 
       <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr 1fr", gap: 8, marginBottom: 12 }}>
-        <Kpi k="Cubiertas" v={`${listas}/${CIRCULACIONES}`} c={completo ? P.ok : P.warn} small />
+        <Kpi k="Cubiertas" v={`${listas}/${totalLinea}`} c={completo ? P.ok : P.warn} small />
         <Kpi k="450 libres" v={String(lib("450"))} c={P.ink} small />
         <Kpi k="465 libres" v={String(lib("465"))} c={P.ink} small />
         <Kpi k="446 libres" v={String(lib("446"))} c={P.ink} small />
@@ -5799,25 +8770,49 @@ function Asignacion({ asig, setAsig, slotSel, setSlotSel, empezar, camp }) {
       <div style={{ ...ST.card, padding: "10px 12px", marginBottom: 12 }}>
         <div style={{ display: "flex", justifyContent: "space-between", fontSize: T.aux, color: P.muted, marginBottom: 4 }}>
           <span>Circulaciones que cubren la punta</span>
-          <span style={{ fontFamily: MONO, fontWeight: 700, color: cubiertas === CIRCULACIONES ? P.ok : P.warn }}>
-            {cubiertas}/{CIRCULACIONES}
+          <span style={{ fontFamily: MONO, fontWeight: 700, color: cubiertas === totalLinea ? P.ok : P.warn }}>
+            {cubiertas}/{totalLinea}
           </span>
         </div>
         <div style={{ height: 5, background: P.sunken, borderRadius: R.menudo, overflow: "hidden" }}>
-          <div style={{ width: `${(cubiertas / CIRCULACIONES) * 100}%`, height: "100%", background: cubiertas === CIRCULACIONES ? P.ok : P.warn }} />
+          <div style={{ width: `${(cubiertas / totalLinea) * 100}%`, height: "100%", background: cubiertas === totalLinea ? P.ok : P.warn }} />
         </div>
       </div>
 
       <div style={{ display: "flex", gap: 8, marginBottom: 16 }}>
-        <button onClick={() => setAsig({ ...asig, ...propuestaTaller(camp) })} style={{ ...ST.btn(false), fontFamily: "inherit" }}>
+        <button
+          onClick={() => {
+            /* La propuesta es de la línea que se está viendo: se fija primero
+               para que se calcule con sus circulaciones y su material.  */
+            fijarLinea(lineaSel);
+            // lo que ya está comprometido en las demás líneas no se propone
+            const ocupadas = new Set(
+              Object.entries(asig.lineas)
+                .filter(([id]) => id !== lineaSel)
+                .flatMap(([, v]) => v.flat())
+                .filter(Boolean)
+            );
+            for (const v of Object.values(asig.apart)) for (const x of v) if (x) ocupadas.add(x);
+            const pr = propuestaTaller(camp, ocupadas);
+            setAsig({ ...asig, lineas: { ...asig.lineas, [lineaSel]: pr.slots }, apart: { ...asig.apart, ...(pr.apart || {}) }, slots: lineaSel === LINEAS_EN_JUEGO[0] ? pr.slots : asig.slots });
+          }}
+          style={{ ...ST.btn(false), fontFamily: "inherit" }}
+        >
           Propuesta de taller
         </button>
-        <button onClick={() => setAsig(initAsignacion())} style={{ ...ST.btn(false), fontFamily: "inherit", flex: 0.6 }}>
+        <button
+          onClick={() => {
+            // se vacía solo la línea que se está viendo
+            const vacio = slotsLinea.map(() => [null, null]);
+            ponSlots(vacio);
+          }}
+          style={{ ...ST.btn(false), fontFamily: "inherit", flex: 0.6 }}
+        >
           Vaciar
         </button>
       </div>
 
-      {asig.slots.map((par, i) => {
+      {!verApartadero && slotsLinea.map((par, i) => {
         const u0 = par[0] ? uni(par[0]) : null;
         const simple = esSimple(par[0]);
         const plazas = plazasSlot(par);
@@ -5831,7 +8826,7 @@ function Asignacion({ asig, setAsig, slotSel, setSlotSel, empezar, camp }) {
               </div>
               <span style={{ fontSize: T.base, fontWeight: 700 }}>Circulación {i + 1}</span>
               <span style={{ fontSize: T.menor, color: P.muted, fontFamily: MONO }}>
-                sale como {numeroTren({ offset: i * INTERVALO, retraso: 0 }, INICIO)}
+                sale como {numeroTren({ offset: i * INTERVALO + DESFASE, retraso: 0 }, INICIO)}
               </span>
               {u0 && (
                 <span style={{ fontSize: T.menor, fontWeight: 700, color: P.blanco, background: SERIE_COLOR[u0.serie], borderRadius: R.menudo, padding: "1px 5px", fontFamily: MONO }}>
@@ -5876,13 +8871,25 @@ function Asignacion({ asig, setAsig, slotSel, setSlotSel, empezar, camp }) {
         );
       })}
 
-      <div style={{ ...ST.eyebrow, margin: "18px 0 6px" }}>Material apartado</div>
-      <div style={{ ...ST.card, padding: 12, marginBottom: 12, fontSize: T.base, color: P.muted, lineHeight: 1.5 }}>
-        Puedes dejar composiciones estacionadas en Príncipe Pío, Chamartín y Alcalá por si las necesitas durante el turno.
+      {verApartadero && (
+      <div style={{ ...ST.card, padding: 12, margin: "12px 0", fontSize: T.base, color: P.muted, lineHeight: 1.5 }}>
+        El material aparcado <strong style={{ color: P.ink }}>no pertenece a ninguna línea</strong>: está en una vía y lo puede tomar cualquiera que pase
+        por esa estación. Se estaciona por unidades sueltas, así que una pareja de Civias puede salir junta en la C-7 o desacoplada para cubrir un
+        servicio de la C-1.
       </div>
+      )}
 
-      {APART_INICIAL.map((idx) => {
-        const est = ESTACIONES[idx];
+      {/* Estaciones donde se puede apartar, reuniendo las de todas las líneas:
+          Chamartín aparece una sola vez aunque la usen las dos.         */}
+      {verApartadero &&
+      (() => {
+        const vistas = [];
+        for (const id of LINEAS_EN_JUEGO)
+          for (const e2 of LINEAS[id].estaciones)
+            if (e2.apartVias && !vistas.some((x) => x.n === e2.n)) vistas.push(e2);
+        return vistas;
+      })().map((est) => {
+        const idx = est.n;
         const compartidas = (est.rotVias || []).filter((v) => est.apartVias.includes(v));
         const ocupadas = est.apartVias.filter((v) => (asig.apart[clave(idx, v)] || []).some(Boolean));
         const rotLibres = (est.rotVias || []).filter((v) => !ocupadas.includes(v)).length;
@@ -5899,7 +8906,11 @@ function Asignacion({ asig, setAsig, slotSel, setSlotSel, empezar, camp }) {
             </div>
             {est.apartVias.map((via) => {
               const par = asig.apart[clave(idx, via)] || [null, null];
-              const simple = esSimple(par[0]);
+              /* En una vía de apartado no rige el acoplamiento: se estaciona por
+               unidades sueltas, y solo el doble piso ocupa la vía él solo. Así
+               una pareja de Civias puede salir junta en la C-7 o desacoplada
+               para cubrir un servicio de la C-1.                        */
+            const simple = !!par[0] && CATALOGO.find((u) => u.id === par[0]).serie === "450";
               return (
                 <div key={via} style={{ display: "flex", gap: 8, alignItems: "center", marginBottom: 8 }}>
                   <span style={{ fontSize: T.aux, color: P.muted, width: 46, fontFamily: MONO, flexShrink: 0 }}>{via}</span>
@@ -5929,7 +8940,7 @@ function Asignacion({ asig, setAsig, slotSel, setSlotSel, empezar, camp }) {
         disabled={!completo}
         style={{ ...ST.btn(completo), width: "100%", padding: "14px 0", fontSize: T.alto, fontFamily: "inherit", opacity: completo ? 1 : 0.45, cursor: completo ? "pointer" : "not-allowed" }}
       >
-        {completo ? "Abrir el turno" : `Faltan ${CIRCULACIONES - listas} circulaciones por cubrir`}
+        {completo ? "Abrir el turno" : `Faltan ${totalLinea - listas} circulaciones por cubrir`}
       </button>
 
       {slotSel && (
@@ -5939,8 +8950,8 @@ function Asignacion({ asig, setAsig, slotSel, setSlotSel, empezar, camp }) {
           // la vía puede no estar aún en el mapa de apartados: desde el día 2
           // el turno abre con 'apart' vacío, y pedir [j] de algo inexistente
           // dejaba la pantalla en blanco
-          actual={(slotSel.apart ? asig.apart[slotSel.apart] || [null, null] : asig.slots[slotSel.i])[slotSel.j]}
-          pareja={(slotSel.apart ? asig.apart[slotSel.apart] || [null, null] : asig.slots[slotSel.i])[slotSel.j === 0 ? 1 : 0]}
+          actual={(slotSel.apart ? asig.apart[slotSel.apart] || [null, null] : slotsLinea[slotSel.i])[slotSel.j]}
+          pareja={(slotSel.apart ? asig.apart[slotSel.apart] || [null, null] : slotsLinea[slotSel.i])[slotSel.j === 0 ? 1 : 0]}
           primera={slotSel.j === 0}
           soloSeries={slotSel.series}
           close={() => setSlotSel(null)}
@@ -5950,15 +8961,17 @@ function Asignacion({ asig, setAsig, slotSel, setSlotSel, empezar, camp }) {
               const par = [...(apart[slotSel.apart] || [null, null])];
               const quita = par[slotSel.j] === id;
               par[slotSel.j] = quita ? null : id;
-              if (!quita && slotSel.j === 0 && esSimple(id)) par[1] = null;
+              // en el apartadero solo el doble piso ocupa la vía él solo
+              if (!quita && slotSel.j === 0 && CATALOGO.find((u) => u.id === id).serie === "450") par[1] = null;
               apart[slotSel.apart] = par;
               setAsig({ ...asig, apart });
             } else {
-              const slots = asig.slots.map((x) => [...x]);
+              // la circulación pertenece a la línea que se está viendo
+              const slots = slotsLinea.map((x) => [...x]);
               const quita = slots[slotSel.i][slotSel.j] === id;
               slots[slotSel.i][slotSel.j] = quita ? null : id;
               if (!quita && slotSel.j === 0 && esSimple(id)) slots[slotSel.i][1] = null;
-              setAsig({ ...asig, slots });
+              ponSlots(slots);
             }
             setSlotSel(null);
           }}
@@ -6150,7 +9163,7 @@ function Trenes({ g, setRotarDe, setTrenSel, setVolverA, setApartarDe, setSuprim
           ? `En vacío hacia ${t.supresion ? ESTACIONES[t.supresion.idx].corto : "la primera vía libre"}`
           : supr
           ? t.reponer
-            ? `Repone en ${ESTACIONES[t.reponer.idx].corto} a las ${hhmm(t.reponer.cuando)}`
+            ? `Repone en ${(ESTACIONES[t.reponer.idx] || {}).corto || "destino"} a las ${hhmm(t.reponer.cuando)}`
             : "Sin material · circulación libre"
           : t.enDesviada
           ? `Apartado en ${ESTACIONES[t.enDesviada.idx].corto}`
@@ -6295,7 +9308,7 @@ function Trenes({ g, setRotarDe, setTrenSel, setVolverA, setApartarDe, setSuprim
               </div>
             </div>
 
-            {(t.rotacion || t.limitacion > 0 || t.retirarCab || t.cambio || t.apartaPaso || t.supresion || t.vacio || t.pendienteApartar || t.carteristas || t.bloqueadoPor) && (
+            {(t.rotacion || t.limitacion > 0 || t.retirarCab || t.cambio || t.apartaPaso || t.supresion || t.vacio || t.pendienteApartar || t.carteristas || t.averiaHeredada || t.bloqueadoPor) && (
               <div style={{ marginTop: 12, display: "flex", gap: 4, flexWrap: "nowrap", overflow: "hidden", alignItems: "center" }}>
                 {t.rotacion && <Etiqueta txt={`Rotación en ${ESTACIONES[t.rotacion.idx].corto}`} c={P.warn} />}
                 {t.limitacion > 0 && <Etiqueta txt={`Marcha limitada +${t.limitacion}′`} c={P.warn} />}
@@ -6322,6 +9335,7 @@ function Trenes({ g, setRotarDe, setTrenSel, setVolverA, setApartarDe, setSuprim
                   )}
                 {t.retirarCab && <Etiqueta txt="Retirada en cabecera" c={P.alert} />}
                 {t.carteristas && <Etiqueta txt="Carteristas a bordo" c={P.alert} />}
+                {t.averiaHeredada && <Etiqueta txt={`${t.averiaHeredada} sin reparar`} c={P.warn} />}
               </div>
             )}
 
@@ -6415,7 +9429,7 @@ function Trenes({ g, setRotarDe, setTrenSel, setVolverA, setApartarDe, setSuprim
                 disabled={!!t.reponer}
                 style={{ width: "100%", marginTop: 8, background: P.surface, color: t.reponer ? P.muted : P.ok, border: `1px solid ${t.reponer ? P.sunken : P.ok}`, borderRadius: R.normal, padding: "9px 0", fontFamily: "inherit", fontSize: T.base, fontWeight: 700, cursor: t.reponer ? "default" : "pointer" }}
               >
-                {t.reponer ? `Repone a las ${hhmm(t.reponer.cuando)} en ${ESTACIONES[t.reponer.idx].corto}` : "Reponer circulación"}
+                {t.reponer ? `Repone a las ${hhmm(t.reponer.cuando)} en ${(ESTACIONES[t.reponer.idx] || {}).corto || "destino"}` : "Reponer circulación"}
               </button>
             )}
           </div>
@@ -6558,7 +9572,9 @@ function Personal({ g }) {
   const grupos = (() => {
     const cubo = { conduciendo: [], entrante: [], enViaje: [], acompanante: [], maniobras: [], descanso: [], fin: [] };
     const reservas = { [CHAMARTIN]: [], [ALCALA]: [], [PIO]: [] };
-    for (const m of g.personal) {
+    /* La bolsa común va aparte del personal de la línea, así que hay que
+       recorrer las dos: si no, la pantalla mostraba cero reservas.     */
+    for (const m of [...g.personal, ...(g.reservaPersonal || [])]) {
       if (m.tipo === "reserva" && m.estado === "reserva") {
         if (reservas[m.lugar]) reservas[m.lugar].push(m);
       } else if (m.tipo === "nominal" && m.estado === "entrante") cubo.entrante.push(m);
@@ -6928,7 +9944,7 @@ function Mapa({ g, detalle, setDetalle, setEstSel, setTrenSel, setVolverA, foco,
           const w = ap ? trazado : trazado + 8;
           const hh = ap ? TRAZO : cab ? 20 : 14;
           const cx = VIA_A + trazado / 2;
-          const libres = e.cab ? reservasEn(g, e.cab).length : 0;
+          const libres = e.cab ? reservasVisibles(g, e.cab) : 0;
           const rest = g.restricciones.find((x) => x.idx === i);
           const col = rest ? P.warn : COLOR.rojo;
           return (
@@ -6980,7 +9996,8 @@ function Mapa({ g, detalle, setDetalle, setEstSel, setTrenSel, setVolverA, foco,
                       ⇄
                     </span>
                   )}
-                  {e.cab && (
+                  {/* solo donde de verdad hay bolsa: en el Aeropuerto nunca la hay */}
+                  {e.cab && tieneReservas(g, e.cab) && (
                     <span style={{ fontSize: T.micro, fontWeight: 700, color: P.blanco, background: libres ? P.solido : P.alert, borderRadius: R.menudo, padding: "1px 5px", fontFamily: MONO, flexShrink: 0 }}>●{libres}</span>
                   )}
                 </div>
@@ -7039,7 +10056,10 @@ function Mapa({ g, detalle, setDetalle, setEstSel, setTrenSel, setVolverA, foco,
                 paddingTop: !maniobrando && !baja ? 5 : 0,
                 // el tren es lo que se mira: va por encima de vías y paradas
                 filter: "drop-shadow(0 2px 3px rgba(10,14,17,.30))",
-                transition: "top .12s linear",
+                /* La animación dura lo mismo que el intervalo de refresco: con 0,12 s y
+                   refresco cada 0,06 s, cada posición nueva cortaba la animación
+                   anterior a medio camino y el tren avanzaba a tirones.      */
+                transition: "top .06s linear",
                 zIndex: 5,
               }}
             >
@@ -7082,7 +10102,10 @@ function Mapa({ g, detalle, setDetalle, setEstSel, setTrenSel, setVolverA, foco,
                 border: foco === t.i ? `2.5px solid ${P.ink}` : "1.5px solid #fff",
                 boxSizing: "content-box",
                 cursor: "pointer",
-                transition: "top .12s linear",
+                /* La animación dura lo mismo que el intervalo de refresco: con 0,12 s y
+                   refresco cada 0,06 s, cada posición nueva cortaba la animación
+                   anterior a medio camino y el tren avanzaba a tirones.      */
+                transition: "top .06s linear",
                 zIndex: 6,
               }}
             />
@@ -7093,7 +10116,19 @@ function Mapa({ g, detalle, setDetalle, setEstSel, setTrenSel, setVolverA, foco,
   );
 }
 
-function PerfilEstacion({ g, i, close, verTren, moverVacio }) {
+function PerfilEstacion({ g, i, close, verTren, moverVacio, maniobrar }) {
+  /* Maniobras de composición sobre el material aparcado. Partir una doble deja
+     sus dos unidades sueltas en la misma vía, y unir dos sueltas de la misma
+     serie forma una doble. Es lo que permite que la C-1, que circula en
+     sencillo, aproveche material de la C-7.                            */
+  const desacoplarApartado = (idx, via) => maniobrar(idx, via, false);
+  const acoplarApartado = (idx, via) => maniobrar(idx, via, true);
+  const acoplable = (idx, x) => {
+    const lista = (g.apartado || {})[idx] || [];
+    const u0 = x.unidades[0];
+    if (!u0 || !SERIES[u0.serie].doble) return false;
+    return lista.some((y) => y !== x && y.via === x.via && y.unidades.length === 1 && y.unidades[0].serie === u0.serie && !y.averiado);
+  };
   const arrastre = useCerrarArrastrando(close);
   const e = ESTACIONES[i];
   const apartado = g.apartado[i] || [];
@@ -7101,9 +10136,12 @@ function PerfilEstacion({ g, i, close, verTren, moverVacio }) {
   const reservas = e.cab ? reservasEn(g, e.cab) : [];
   const nominales = e.cab ? g.personal.filter((m) => m.tipo === "nominal" && m.estado === "entrante" && m.lugar === e.cab) : [];
   const rest = g.restricciones.find((x) => x.idx === i);
+  /* Los destinos salen de los extremos de la línea vigente. Estaban escritos a
+     mano con los de la C-7, así que en la C-1 los andenes decían "hacia Alcalá
+     de Henares" cuando esa estación no existe en esa línea.           */
   const sentidos = [
-    ["hacia Alcalá de Henares", pasoPorEstacion(g, i, "alcala"), "alcala"],
-    ["hacia Príncipe Pío", pasoPorEstacion(g, i, "pio"), "pio"],
+    [`hacia ${ALCALA}`, pasoPorEstacion(g, i, "alcala"), "alcala"],
+    [`hacia ${PIO}`, pasoPorEstacion(g, i, "pio"), "pio"],
   ];
 
   return (
@@ -7131,7 +10169,8 @@ function PerfilEstacion({ g, i, close, verTren, moverVacio }) {
             {rest.tramo && (
               <div style={{ marginTop: 4 }}>
                 Vía única entre <strong>{ESTACIONES[rest.tramo.a].n}</strong> y <strong>{ESTACIONES[rest.tramo.b].n}</strong>. Los trenes de sentido{" "}
-                {rest.dir === "alcala" ? "Alcalá" : "Príncipe Pío"} circulan por la contraria y se cruzan en esas estaciones.
+                {/* el destino sale de la línea vigente, no de la C-7 */}
+                {rest.dir === "alcala" ? ALCALA : PIO} circulan por la contraria y se cruzan en esas estaciones.
               </div>
             )}
           </div>
@@ -7140,7 +10179,7 @@ function PerfilEstacion({ g, i, close, verTren, moverVacio }) {
         {/* viajeros */}
         {!e.puesto && <Bloque titulo="Viajeros en andén">
           {sentidos.map(([nom, paso, dir], k) => {
-            const n = g.andenes[i][dir];
+            const n = (g.andenes[i] || { alcala: 0, pio: 0 })[dir];
             const bloqueado = (dir === "alcala" && i === N - 1) || (dir === "pio" && i === 0);
             if (bloqueado) return null;
             return (
@@ -7164,6 +10203,42 @@ function PerfilEstacion({ g, i, close, verTren, moverVacio }) {
             Escala de afluencia {e.esc}/5 · llegan {(VIAJEROS_MIN_100 * intensidad(g.reloj) * pesoOrigen(i, marea(g.reloj)) / ESTACIONES.reduce((n2, _, j) => n2 + pesoOrigen(j, marea(g.reloj)), 0)).toFixed(1)} viajeros por minuto
           </div>
         </Bloque>}
+
+        {/* Otras líneas que paran aquí. Una estación como Chamartín tiene gente
+            esperando en varios andenes a la vez, y el jugador debe verla toda
+            aunque esté mirando una línea concreta.                      */}
+        {!e.puesto &&
+          Object.keys(g.porLinea || {})
+            .filter((id) => id !== (g.linea || LINEAS_EN_JUEGO[0]))
+            .map((id) => {
+              const L = LINEAS[id];
+              const jj = L.estaciones.findIndex((x) => x.n === e.n);
+              if (jj < 0) return null;
+              const otra = g.porLinea[id];
+              const alto = L.estaciones[L.estaciones.length - 1].n;
+              const bajo = L.estaciones[0].n;
+              const filas = [
+                [`hacia ${alto}`, "alcala", jj < L.estaciones.length - 1],
+                [`hacia ${bajo}`, "pio", jj > 0],
+              ].filter(([, , ok]) => ok);
+              return (
+                <Bloque key={id} titulo={`Viajeros en andén · ${id}`}>
+                  {filas.map(([nom2, dir2], k2) => (
+                    <div key={nom2} style={{ background: fondoFila(k2), padding: "8px 10px", margin: "0 -12px", borderRadius: R.normal }}>
+                      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 8 }}>
+                        <span style={{ display: "flex", alignItems: "center", gap: 8, minWidth: 0 }}>
+                          <Enlace txt={id} bg={LIN[id]} />
+                          <span style={{ fontSize: T.base, fontWeight: 600, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{nom2}</span>
+                        </span>
+                        <span style={{ fontSize: T.titulo, fontWeight: 700, fontFamily: MONO }}>
+                          {nf(Math.round((otra.andenes[jj] || {})[dir2] || 0))}
+                        </span>
+                      </div>
+                    </div>
+                  ))}
+                </Bloque>
+              );
+            })}
 
         {/* material */}
         {viasGenerales(i) && (
@@ -7195,6 +10270,45 @@ function PerfilEstacion({ g, i, close, verTren, moverVacio }) {
             })}
           </Bloque>
         )}
+
+        {/* Vías que usan aquí las demás líneas. Una estación como Chamartín la
+            comparten varias, y el puesto de mando tiene que ver todo lo que hay
+            en ella, no solo lo de la línea que esté mirando.           */}
+        {Object.keys(g.porLinea || {})
+          .filter((id) => id !== (g.linea || LINEAS_EN_JUEGO[0]))
+          .map((id) => {
+            const L = LINEAS[id];
+            const jj = L.estaciones.findIndex((x) => x.n === e.n);
+            if (jj < 0) return null;
+            const ee = L.estaciones[jj];
+            // solo las de inversión: las de apartado son comunes y van aparte
+            const vias = [...(ee.rotVias || [])];
+            if (!vias.length) return null;
+            const otra = g.porLinea[id];
+            return (
+              <Bloque key={`v${id}`} titulo={`Vías de la ${id}`}>
+                {vias.map((via, k) => {
+                  // qué tren de esa línea ocupa esta vía ahora mismo
+                  const ocupa = (otra.trenes || []).find(
+                    (t) => (t.rotando && t.rotando.idx === jj && t.rotando.via === via) || (t.supresion && t.supresion.idx === jj && t.supresion.via === via)
+                  );
+                  return (
+                    <div key={via} style={{ background: fondoFila(k), padding: "8px 10px", margin: "0 -12px", borderRadius: R.normal }}>
+                      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 8 }}>
+                        <span style={{ display: "flex", alignItems: "center", gap: 8, minWidth: 0 }}>
+                          <Enlace txt={id} bg={LIN[id]} />
+                          <span style={{ fontSize: T.base, fontFamily: MONO, fontWeight: 700 }}>{via}</span>
+                        </span>
+                        <span style={{ fontSize: T.aux, color: ocupa ? P.ink : P.muted, fontWeight: ocupa ? 700 : 400, whiteSpace: "nowrap" }}>
+                          {ocupa ? `${numeroTren(ocupa, g.reloj)} · ${ocupa.unidades.map((u) => u.id).join(" + ")}` : "libre"}
+                        </span>
+                      </div>
+                    </div>
+                  );
+                })}
+              </Bloque>
+            );
+          })}
 
         {e.rotVias && (
         <Bloque titulo={e.paso ? "Vías de paso e inversión" : "Vías desviadas"}>
@@ -7271,17 +10385,44 @@ function PerfilEstacion({ g, i, close, verTren, moverVacio }) {
           )}
           {(e.rotDir || (e.apartVias || []).some((v) => e.rotVias.includes(v))) && (
             <div style={{ fontSize: T.aux, color: P.muted, marginTop: 8, lineHeight: 1.4 }}>
-              {e.rotDir ? `Solo se invierte en sentido ${e.rotDir === "pio" ? "Príncipe Pío" : "Alcalá"}. ` : ""}
+              {e.rotDir ? `Solo se invierte en sentido ${e.rotDir === "pio" ? PIO : ALCALA}. ` : ""}
               {(e.apartVias || []).some((v) => e.rotVias.includes(v)) ? "Vías compartidas con el apartadero." : ""}
             </div>
           )}
         </Bloque>
         )}
 
+        {/* Apartadero común. Las vías de apartado no son de ninguna línea en
+            concreto: en Chamartín, las M las usan todas para dejar material,
+            así que aquí se ve lo que hay de cualquiera de ellas.        */}
         {e.apartVias && (
         <Bloque titulo="Apartadero">
           {(
             <>
+              {Object.keys(g.porLinea || {})
+                .filter((id) => id !== (g.linea || LINEAS_EN_JUEGO[0]))
+                .flatMap((id) => {
+                  const L = LINEAS[id];
+                  const jj = L.estaciones.findIndex((x) => x.n === e.n);
+                  if (jj < 0) return [];
+                  const lista = (g.porLinea[id].apartado || {});
+                  return Object.entries(lista)
+                    .filter(([k2]) => k2.startsWith(`${jj}|`))
+                    .flatMap(([k2, arr]) => (arr || []).map((x) => ({ ...x, linea: id, via: k2.split("|")[1] })));
+                })
+                .map((x, k) => (
+                  <div key={`o${k}`} style={{ background: fondoFila(k), padding: "8px 10px", margin: "0 -12px", borderRadius: R.normal }}>
+                    <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", gap: 8 }}>
+                      <span style={{ display: "flex", alignItems: "center", gap: 8, minWidth: 0 }}>
+                        <Enlace txt={x.linea} bg={LIN[x.linea]} />
+                        <span style={{ fontSize: T.base, fontWeight: 700, fontFamily: MONO }}>{x.unidades.map((u) => u.id).join(" + ")}</span>
+                      </span>
+                      <span style={{ fontSize: T.aux, color: P.muted }}>{x.via}</span>
+                    </div>
+                    <div style={{ fontSize: T.aux, color: P.muted, marginTop: 2 }}>Material de la {x.linea} · no se gestiona desde aquí</div>
+                  </div>
+                ))}
+
               {apartado.map((x, k) => (
                 <div key={k} style={{ background: fondoFila(k), padding: "8px 10px", margin: "0 -12px", borderRadius: R.normal }}>
                   <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline" }}>
@@ -7291,6 +10432,27 @@ function PerfilEstacion({ g, i, close, verTren, moverVacio }) {
                   <div style={{ fontSize: T.aux, color: x.averiado ? P.alert : P.muted, marginTop: 2 }}>
                     {x.averiado ? "Averiado · fuera de servicio hasta reparación" : `${nf(x.unidades.reduce((n, u) => n + u.plazas, 0))} plazas · disponible`} ·
                     desde las {hhmm(x.desde)}
+                  </div>
+                  {/* Maniobras sobre el material aparcado: partir una doble
+                      para que una unidad pueda cubrir una línea que circula en
+                      sencillo, o unir dos sueltas de la misma serie.    */}
+                  <div style={{ display: "flex", gap: 6, marginTop: 8 }}>
+                    {x.unidades.length > 1 && !x.averiado && (
+                      <button
+                        onClick={() => desacoplarApartado(i, x.via)}
+                        style={{ flex: 1, background: P.surface, color: P.ink, border: `1px solid ${P.rule}`, borderRadius: R.normal, padding: "6px 0", fontFamily: "inherit", fontSize: T.aux, fontWeight: 600, cursor: "pointer" }}
+                      >
+                        Desacoplar
+                      </button>
+                    )}
+                    {x.unidades.length === 1 && !x.averiado && acoplable(i, x) && (
+                      <button
+                        onClick={() => acoplarApartado(i, x.via)}
+                        style={{ flex: 1, background: P.surface, color: P.ink, border: `1px solid ${P.rule}`, borderRadius: R.normal, padding: "6px 0", fontFamily: "inherit", fontSize: T.aux, fontWeight: 600, cursor: "pointer" }}
+                      >
+                        Acoplar
+                      </button>
+                    )}
                   </div>
                   {/* llevar el material a otro sitio con una marcha en vacío */}
                   <button
@@ -7537,7 +10699,7 @@ function BarraDatos({ g }) {
 
 /* Barra de mando, anclada abajo: en el móvil el pulgar llega sin cruzar la
    pantalla, y pausa, velocidad y pestañas son lo que más se toca.        */
-function BarraMando({ g, setG, tab, setTab, setAjustes }) {
+function BarraMando({ g, setG, tab, setTab, setAjustes, setAnalisis, setCalidad, sinLeer }) {
   const [abierto, setAbierto] = useState(false); // desplegable de velocidad
   const [lineas, setLineas] = useState(false); // desplegable de líneas
   return (
@@ -7562,7 +10724,99 @@ function BarraMando({ g, setG, tab, setTab, setAjustes }) {
             al extremo derecho. Para que el centrado no se rompa, se reserva a
             la izquierda el mismo hueco que ocupan los ajustes.          */}
         <div style={{ display: "flex", alignItems: "center", gap: 8, padding: "0 12px 8px" }}>
-          <div style={{ width: 34, flexShrink: 0 }} />
+          <button
+            onClick={() => setAnalisis(true)}
+            title="Análisis"
+            style={{
+              width: 34,
+              height: 34,
+              flexShrink: 0,
+              border: `1px solid ${P.rule}`,
+              background: P.surface,
+              borderRadius: R.normal,
+              cursor: "pointer",
+              display: "flex",
+              alignItems: "flex-end",
+              justifyContent: "center",
+              gap: 2,
+              padding: "0 0 9px",
+            }}
+          >
+            {/* tres barras de altura creciente: el icono de una estadística */}
+            {[6, 11, 8].map((h, k) => (
+              <span key={k} style={{ width: 3, height: h, background: P.muted, borderRadius: 1, display: "block" }} />
+            ))}
+          </button>
+
+          {/* Calidad del servicio y reacciones de los viajeros. Lleva contador
+              de mensajes sin leer para que se note desde la barra cuando algo
+              se está torciendo, sin tener que entrar a mirar.           */}
+          <button
+            onClick={() => setCalidad(true)}
+            title="Calidad del servicio"
+            style={{
+              width: 34,
+              height: 34,
+              flexShrink: 0,
+              border: `1px solid ${P.rule}`,
+              background: P.surface,
+              borderRadius: R.normal,
+              cursor: "pointer",
+              display: "flex",
+              alignItems: "center",
+              justifyContent: "center",
+              position: "relative",
+            }}
+          >
+            {/* globo de conversación */}
+            <span
+              style={{
+                width: 16,
+                height: 12,
+                border: `1.6px solid ${P.muted}`,
+                borderRadius: 3,
+                display: "block",
+                position: "relative",
+              }}
+            >
+              <span
+                style={{
+                  position: "absolute",
+                  left: 2,
+                  bottom: -4,
+                  width: 0,
+                  height: 0,
+                  borderLeft: `3px solid transparent`,
+                  borderRight: `3px solid transparent`,
+                  borderTop: `4px solid ${P.muted}`,
+                }}
+              />
+            </span>
+            {sinLeer > 0 && (
+              <span
+                style={{
+                  position: "absolute",
+                  top: -4,
+                  right: -4,
+                  minWidth: 15,
+                  height: 15,
+                  padding: "0 3px",
+                  borderRadius: 8,
+                  background: COLOR.rojo,
+                  color: P.blanco,
+                  fontSize: 9,
+                  fontWeight: 800,
+                  fontFamily: MONO,
+                  display: "flex",
+                  alignItems: "center",
+                  justifyContent: "center",
+                  border: `1.5px solid ${P.surface}`,
+                }}
+              >
+                {sinLeer > 99 ? "99" : sinLeer}
+              </span>
+            )}
+          </button>
           <div style={{ flex: 1, display: "flex", alignItems: "center", justifyContent: "center", gap: 8 }}>
           {/* Selector de línea. Solo la C-7 está implementada; el resto del
               núcleo aparece atenuado, igual que en la portada, para que se vea
@@ -7594,21 +10848,26 @@ function BarraMando({ g, setG, tab, setTab, setAjustes }) {
                 }}
               >
                 {LINEAS_NUCLEO.map((l) => {
-                  const activa = l.id === LINEA;
+                  // en juego las que se hayan abierto en esta partida
+                  const enJuego = !!(g.porLinea && g.porLinea[l.id]);
+                  const mirando = l.id === (g.linea || LINEAS_EN_JUEGO[0]);
                   return (
                     <button
                       key={l.id}
-                      disabled={!activa}
-                      onClick={() => setLineas(false)}
-                      title={activa ? l.n : `${l.n} · próximamente`}
+                      disabled={!enJuego}
+                      onClick={() => {
+                        if (enJuego) setG((p2) => cambiarVista(p2, l.id));
+                        setLineas(false);
+                      }}
+                      title={enJuego ? l.n : `${l.n} · próximamente`}
                       style={{
                         ...PASTILLA,
                         display: "flex",
                         background: LIN[l.id],
                         color: P.blanco,
-                        border: "none",
-                        opacity: activa ? 1 : 0.28,
-                        cursor: activa ? "pointer" : "not-allowed",
+                        border: mirando ? `2px solid ${P.ink}` : "none",
+                        opacity: enJuego ? 1 : 0.28,
+                        cursor: enJuego ? "pointer" : "not-allowed",
                         marginBottom: 4,
                       }}
                     >
@@ -7854,7 +11113,10 @@ function avisoFlota(g, sel) {
    cabecera con personal.                                          */
 
 const MARGEN_REPOSICION = 15; // preparación del material y toma de mando
-const CABECERAS_REP = [IDX_PIO, IDX_CHAMARTIN, IDX_ALCALA];
+/* Cabeceras donde se puede reponer una circulación. Se recalcula al fijar la
+   línea: escrita como constante, guardaba los índices de la C-7 y en la C-1
+   apuntaban a estaciones inexistentes.                                 */
+let CABECERAS_REP = [IDX_PIO, IDX_CHAMARTIN, IDX_ALCALA];
 
 // fases del ciclo en que una circulación pasa por esa cabecera
 const fasesEn = (idx) => (idx === 0 ? [0] : idx === N - 1 ? [SALE_ALCALA] : [ESTACIONES[idx].t, LLEGA_PIO - ESTACIONES[idx].t]);
@@ -7862,9 +11124,16 @@ const fasesEn = (idx) => (idx === 0 ? [0] : idx === N - 1 ? [SALE_ALCALA] : [EST
 // próxima hora a la que la marcha de ese tren pasa por la cabecera
 function proximaReposicion(t, idx, desde, hasta = null) {
   const tope = hasta === null ? FIN : hasta;
+  /* Cuántos ciclos hay que recorrer. Estaba fijado en diez, que con el ciclo
+     de 260 min de la C-7 cubre de sobra el turno, pero con los 45 min de la
+     C-1 no llegaba ni al principio: el juego decía que no quedaban pasos por
+     cabecera a las ocho de la mañana.                                  */
+  const desdeK = Math.floor((desde - t.offset) / CICLO) - 1;
+  const hastaK = Math.ceil((tope - t.offset) / CICLO) + 1;
+
   let mejor = null;
   for (const q of fasesEn(idx))
-    for (let k = -1; k < 10; k++) {
+    for (let k = desdeK; k <= hastaK; k++) {
       const T = t.offset + q + CICLO * k;
       if (T >= desde + MARGEN_REPOSICION && T <= tope && (!mejor || T < mejor)) mejor = T;
     }
@@ -7989,7 +11258,8 @@ function viajeMaquinista(g, idxDesde, idxHasta) {
 
 // ordena el movimiento: el material no se mueve hasta que llega el maquinista
 function ordenarVacio(g, orden) {
-  const maq = g.personal.find((m) => m.id === orden.maqId);
+  // puede estar en la plantilla o en la bolsa común
+  const maq = g.personal.find((m) => m.id === orden.maqId) || (g.reservaPersonal || []).find((m) => m.id === orden.maqId);
   if (!maq) return;
   const idxCab = ESTACIONES.findIndex((e) => e.cab === maq.lugar);
   const v = viajeMaquinista(g, idxCab < 0 ? IDX_CHAMARTIN : idxCab, orden.idx);
@@ -8195,14 +11465,19 @@ function SelectorReposicion({ g, setG, i, close }) {
   const t = g.trenes.find((x) => x.i === i);
   if (!t) return null;
 
-  const puntos = CABECERAS_REP.map((idx) => {
-    const cab = ESTACIONES[idx].cab || ESTACIONES[idx].n;
+  const puntos = CABECERAS_REP.filter((idx) => ESTACIONES[idx]).map((idx) => {
+    const cab = cabeceraDe(idx);
     return {
       idx,
       nombre: ESTACIONES[idx].n,
       cuando: proximaReposicion(t, idx, g.reloj),
       comps: composicionesDisponibles(g, idx),
-      reservas: reservasEn(g, cab).length,
+      /* Se cuenta sin mover a nadie, y contando también los que están en otra
+         cabecera: un maquinista de reserva viaja como cualquier viajero en el
+         primer tren y se planta donde haga falta. No tener a nadie ALLÍ no es
+         motivo para no poder reponer.                                   */
+      reservas: reservasVisibles(g, cab),
+      foraneas: reservasLibresTotal(g) - reservasVisibles(g, cab),
     };
   }).filter((p2) => p2.cuando !== null);
 
@@ -8230,18 +11505,23 @@ function SelectorReposicion({ g, setG, i, close }) {
               <span style={{ fontSize: T.aux, color: P.muted }}>en {Math.round(p2.cuando - g.reloj)} min</span>
             </div>
 
-            {!p2.reservas && <div style={{ fontSize: T.aux, color: P.alert, marginBottom: 4 }}>Sin maquinista de reserva en esta cabecera.</div>}
+            {!p2.reservas && !p2.foraneas && <div style={{ fontSize: T.aux, color: P.alert, marginBottom: 4 }}>No queda ningún maquinista de reserva libre.</div>}
+            {!p2.reservas && p2.foraneas > 0 && (
+              <div style={{ fontSize: T.aux, color: P.warn, marginBottom: 4 }}>
+                Sin reservas aquí: {p2.foraneas === 1 ? "vendrá uno" : "vendrá uno de los " + p2.foraneas} desde otra cabecera, viajando de viajero.
+              </div>
+            )}
             {p2.comps.length === 0 && <Vacio icono="⊘" txt="Sin material disponible" pista="No hay composiciones apartadas en esta estación." />}
 
             {p2.comps.map((c) => (
               <button
                 key={c.clave}
-                disabled={!p2.reservas}
+                disabled={!p2.reservas && !p2.foraneas}
                 onClick={() => {
                   setG((p3) => aplicar(clonar(p3), { reponer: { i, idx: p2.idx, clave: c.clave, cuando: p2.cuando } }));
                   close();
                 }}
-                style={{ display: "block", width: "100%", textAlign: "left", background: P.surface, border: `1px solid ${P.rule}`, borderRadius: R.normal, padding: "9px 11px", marginBottom: 4, fontFamily: "inherit", cursor: p2.reservas ? "pointer" : "not-allowed", opacity: p2.reservas ? 1 : 0.4, color: P.ink }}
+                style={{ display: "block", width: "100%", textAlign: "left", background: P.surface, border: `1px solid ${P.rule}`, borderRadius: R.normal, padding: "9px 11px", marginBottom: 4, fontFamily: "inherit", cursor: p2.reservas || p2.foraneas ? "pointer" : "not-allowed", opacity: p2.reservas || p2.foraneas ? 1 : 0.4, color: P.ink }}
               >
                 <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", gap: 8 }}>
                   <span style={{ fontSize: T.base, fontWeight: 700, fontFamily: MONO }}>{c.unidades.map((u) => u.id).join(" + ")}</span>
@@ -8346,6 +11626,10 @@ function SelectorTaller({ g, setG, id, close }) {
       const hecho = t.restan > 0 ? (total - t.restan) / total : 1;
       const nuevo = Math.max(0, t.entrada - REVISIONES[t.tipo].quita * hecho);
       n.desg = { ...n.desg, [id]: nuevo };
+      /* Sale del taller: deja de estar averiada. Sin esto la marca se
+         arrastraba a la campaña y la unidad volvía inútil al turno siguiente,
+         como si no hubiera pasado por el taller.                         */
+      n.reparadas = [...new Set([...(n.reparadas || []), id])];
       const { [id]: fuera, ...resto } = n.taller;
       n.taller = resto;
       n.reserva = [...n.reserva, { ...cat, desgaste: nuevo, fiab: fiabDesgaste(nuevo), vencida: false }];
@@ -8474,6 +11758,7 @@ function Taller({ g, setG, verUnidad, abierto, setAbierto, setGestion }) {
       for (const [id, t] of listas) {
         const nuevo = Math.max(0, t.entrada - REVISIONES[t.tipo].quita);
         n.desg = { ...n.desg, [id]: nuevo };
+        n.reparadas = [...new Set([...(n.reparadas || []), id])]; // deja de estar averiada
         const cat = CATALOGO.find((u) => u.id === id);
         if (cat) n.reserva = [...n.reserva, { ...cat, desgaste: nuevo, fiab: fiabDesgaste(nuevo), vencida: false }];
         delete n.taller[id];
@@ -8788,7 +12073,7 @@ function Taller({ g, setG, verUnidad, abierto, setAbierto, setGestion }) {
   );
 }
 
-function PerfilUnidad({ g, id, close, volverA, volver, verTaller, gestionar }) {
+function PerfilUnidad({ g, id, close, volverA, volver, verTaller, gestionar, camp }) {
   const arrastre = useCerrarArrastrando(close); // antes de cualquier return
   const cat = CATALOGO.find((u) => u.id === id);
   if (!cat) return null;
@@ -8908,6 +12193,34 @@ function PerfilUnidad({ g, id, close, volverA, volver, verTaller, gestionar }) {
           </div>
         </Bloque>
 
+        {/* Libro de averías: lo que le ha pasado a esta unidad, cuándo, y si
+            quedó resuelto. Es el historial que decide si conviene mandarla al
+            taller o si puede seguir dando servicio.                     */}
+        <Bloque titulo="Libro de averías">
+          {(() => {
+            const hoja = [...((camp && camp.libro && camp.libro[id]) || [])];
+            // lo declarado en el turno en curso aún no está en la campaña
+            for (const av of g.averiasTurno || []) if (av.id === id) hoja.push({ dia: null, turno: av.turno, m: av.m, nombre: av.nombre, grado: av.grado, resuelta: av.resuelta });
+            if (!hoja.length) return <Vacio icono="✓" txt="Sin averías registradas" pista="Esta unidad no ha dado ningún problema." />;
+            return [...hoja].reverse().map((x, k) => (
+              <div key={k} style={{ display: "flex", alignItems: "baseline", gap: 8, padding: "7px 0", borderBottom: k < hoja.length - 1 ? `1px solid ${P.sunken}` : "none" }}>
+                <span style={{ fontSize: T.micro, fontFamily: MONO, color: P.muted, width: 74, flexShrink: 0 }}>
+                  {x.dia ? `D${x.dia} ` : "hoy "}
+                  {hhmm(x.m)}
+                </span>
+                <span style={{ fontSize: T.aux, flex: 1, minWidth: 0 }}>
+                  {x.nombre}
+                  <span style={{ color: P.muted }}> · {x.grado === "muygrave" ? "muy grave" : x.grado}</span>
+                </span>
+                <Etiqueta
+                  txt={x.taller ? (x.taller === "reparada" ? "Reparada" : `Taller ${x.taller}`) : x.resuelta ? "Resuelta" : "Sin reparar"}
+                  c={x.resuelta ? P.ok : P.alert}
+                />
+              </div>
+            ));
+          })()}
+        </Bloque>
+
         <Bloque titulo="Trenes que hace hoy">
           {marchas.length === 0 && <Vacio icono="—" txt="Sin servicio en este turno" pista="Esta unidad no tiene circulación asignada." />}
           {marchas.map((x, k) => {
@@ -8959,7 +12272,7 @@ function PerfilTren({ g, i, close, setRotarDe, setApartarDe, setSuprimirDe, setR
   const t = g.trenes.find((x) => x.i === i);
   if (!t) return null;
   const sit = situacion(t, g.reloj);
-  const m = t.maq ? g.personal.find((x) => x.id === t.maq) : null;
+  const m = t.maq ? maqDe(g, t) : null;
   const supr = t.estado === "suprimido";
   const aBordo = t.pax.reduce((a, b) => a + b, 0);
   const cap = plazasDe(t) || 1;
@@ -9114,6 +12427,10 @@ function PerfilTren({ g, i, close, setRotarDe, setApartarDe, setSuprimirDe, setR
               </div>
             )}
           </div>
+        </Bloque>
+
+        <Bloque titulo="Gráfico de marcha">
+          <Malla t={{ ...t, ahora: g.reloj }} />
         </Bloque>
 
         <Bloque titulo="Rotación del día">
@@ -9567,6 +12884,845 @@ function InfoLinea() {
         </span>
       </div>
 
+    </div>
+  );
+}
+
+/* Gráfico de marcha de una circulación: el tiempo en horizontal y la línea en
+   vertical, con las estaciones espaciadas por tiempo de recorrido y no a
+   distancias iguales, como en una malla de verdad. La pendiente de cada trazo
+   es la velocidad, y la separación entre lo previsto y lo real es el retraso
+   que se acumula.                                                         */
+/* Estaciones que se rotulan en los gráficos de marcha, con su sigla. Con el
+   nombre entero el canalón se comía un tercio del ancho útil; y solo con las
+   tres cabeceras costaba situar los tramos intermedios.                  */
+/* Estaciones rotuladas en los gráficos de marcha, con su sigla. Cada línea
+   tiene las suyas: con las de la C-7 fijas, la malla de la C-1 salía sin un
+   solo rótulo.                                                         */
+const SIGLAS_C7 = {
+  "Príncipe Pío": "PP",
+  Pozuelo: "PO",
+  Pitis: "PT",
+  Chamartín: "CH",
+  Atocha: "MT",
+  "Vicálvaro": "VI",
+  "Torrejón de Ardoz": "TO",
+  "Alcalá de Henares": "AH",
+};
+
+const SIGLAS_C1 = {
+  "Chamartín": "MH",
+  "Fuente de la Mora": "FM",
+  Valdebebas: "VB",
+  "Aeropuerto T4": "BT",
+};
+
+// las de la línea que se está dibujando
+const SIGLA = new Proxy({}, { get: (_, k) => (LINEA === "C-1" ? SIGLAS_C1 : SIGLAS_C7)[k] });
+
+function Malla({ t }) {
+  const AL = 190; // alto útil del gráfico
+  const AN = 300; // ancho útil
+  const IZQ = 20; // canalón para las siglas de cabecera
+  const ARR = 12;
+  const dur = FIN - INICIO;
+  const tope = ESTACIONES[N - 1].t || 1;
+
+  const x = (min) => IZQ + ((min - INICIO) / dur) * AN;
+  const y = (idx) => {
+    const k = Math.max(0, Math.min(N - 1, idx));
+    const ent = Math.floor(k);
+    const frac = k - ent;
+    const a = ESTACIONES[ent].t;
+    const b = ESTACIONES[Math.min(N - 1, ent + 1)].t;
+    return ARR + ((a + (b - a) * frac) / tope) * AL;
+  };
+
+  // lo previsto: cada marcha del cuadro, de su origen a su destino
+  const previstas = (t.marchas || []).map((m) => {
+    const desde = m.dir === "alcala" ? 0 : N - 1;
+    const hasta = m.dir === "alcala" ? N - 1 : 0;
+    return `M ${x(m.ini).toFixed(1)} ${y(desde).toFixed(1)} L ${x(m.fin).toFixed(1)} ${y(hasta).toFixed(1)}`;
+  });
+
+  // lo real: el rastro que va dejando el tren, cortado donde no circula
+  const tramos = [];
+  let actual = [];
+  (t.traza || []).forEach((pos, k) => {
+    if (pos === null || pos === undefined) {
+      if (actual.length > 1) tramos.push(actual);
+      actual = [];
+      return;
+    }
+    actual.push(`${x(INICIO + k * PASO_TRAZA).toFixed(1)} ${y(pos / 10).toFixed(1)}`);
+  });
+  if (actual.length > 1) tramos.push(actual);
+
+  const horas = [];
+  for (let m = Math.ceil(INICIO / 60) * 60; m <= FIN; m += 60) horas.push(m);
+
+  return (
+    <div style={{ marginTop: 8 }}>
+      <svg viewBox={`0 0 ${IZQ + AN + 6} ${AL + ARR + 16}`} style={{ width: "100%", display: "block" }}>
+        {/* estaciones: se rotulan solo las cabeceras para no saturar */}
+        {ESTACIONES.map((e, i) => (
+          <line key={e.n} x1={IZQ} y1={y(i)} x2={IZQ + AN} y2={y(i)} stroke={SIGLA[e.n] ? P.rule : P.sunken} strokeWidth={e.cab || e.term ? 1 : SIGLA[e.n] ? 0.7 : 0.5} />
+        ))}
+        {ESTACIONES.map((e, i) =>
+          SIGLA[e.n] ? (
+            <text key={`r${e.n}`} x={IZQ - 4} y={y(i) + 3} textAnchor="end" fontSize="7.5" fill={P.muted} fontFamily={MONO} fontWeight="700">
+              {SIGLA[e.n] || e.corto}
+            </text>
+          ) : null
+        )}
+
+        {/* horas en punto */}
+        {horas.map((m) => (
+          <g key={m}>
+            <line x1={x(m)} y1={ARR} x2={x(m)} y2={ARR + AL} stroke={P.sunken} strokeWidth="0.5" />
+            <text x={x(m)} y={AL + ARR + 12} textAnchor="middle" fontSize="7" fill={P.muted} fontFamily={MONO}>
+              {hhmm(m).slice(0, 2)}
+            </text>
+          </g>
+        ))}
+
+        {/* previsto en gris discontinuo, real en el rojo de la línea */}
+        {previstas.map((d, k) => (
+          <path key={`p${k}`} d={d} stroke={P.muted} strokeWidth="1.2" strokeDasharray="3 3" fill="none" opacity="0.65" />
+        ))}
+        {tramos.map((pts, k) => (
+          <polyline key={`r${k}`} points={pts.join(" ")} stroke={COLOR.rojo} strokeWidth="1.8" fill="none" strokeLinejoin="round" strokeLinecap="round" />
+        ))}
+
+        {/* el instante actual */}
+        <line x1={x(Math.min(FIN, Math.max(INICIO, t.ahora || INICIO)))} y1={ARR} x2={x(Math.min(FIN, Math.max(INICIO, t.ahora || INICIO)))} y2={ARR + AL} stroke={P.ink} strokeWidth="0.8" opacity="0.35" />
+      </svg>
+
+      <div style={{ display: "flex", gap: 12, fontSize: T.micro, color: P.muted, marginTop: 4 }}>
+        <span style={{ display: "flex", alignItems: "center", gap: 4 }}>
+          <span style={{ width: 14, height: 0, borderTop: `1.5px dashed ${P.muted}`, display: "inline-block" }} /> previsto
+        </span>
+        <span style={{ display: "flex", alignItems: "center", gap: 4 }}>
+          <span style={{ width: 14, height: 2, background: COLOR.rojo, display: "inline-block", borderRadius: 1 }} /> real
+        </span>
+      </div>
+    </div>
+  );
+}
+
+/* ── gráficos de la pantalla de análisis ────────────────────────
+   Todos comparten el mismo lenguaje: rejilla tenue, horas abajo y el dato
+   dibujado encima. Se construyen en SVG para que escalen con la pantalla. */
+
+// evolución de una magnitud a lo largo del turno
+function Serie({ muestras, campo, color, unidad, alto = 90, relleno = true }) {
+  if (!muestras || muestras.length < 2) return <Vacio icono="~" txt="Aún no hay datos" pista="La evolución aparece a los pocos minutos de turno." />;
+  const AN = 320;
+  const IZQ = 26;
+  const vals = muestras.map((x) => x[campo]);
+  const max = Math.max(1, ...vals);
+  const x = (m) => IZQ + ((m - INICIO) / Math.max(1, FIN - INICIO)) * AN;
+  const y = (v) => 6 + (1 - v / max) * (alto - 6);
+  const pts = muestras.map((s2) => `${x(s2.m).toFixed(1)} ${y(s2[campo]).toFixed(1)}`);
+  const horas = [];
+  for (let m = Math.ceil(INICIO / 60) * 60; m <= FIN; m += 60) horas.push(m);
+
+  return (
+    <svg viewBox={`0 0 ${IZQ + AN + 4} ${alto + 16}`} style={{ width: "100%", display: "block" }}>
+      {[0, 0.5, 1].map((f) => (
+        <g key={f}>
+          <line x1={IZQ} y1={y(max * f)} x2={IZQ + AN} y2={y(max * f)} stroke={P.sunken} strokeWidth="0.6" />
+          <text x={IZQ - 3} y={y(max * f) + 3} textAnchor="end" fontSize="7" fill={P.muted} fontFamily={MONO}>
+            {max * f >= 1000 ? `${Math.round((max * f) / 100) / 10}k` : Math.round(max * f)}
+          </text>
+        </g>
+      ))}
+      {horas.map((m) => (
+        <text key={m} x={x(m)} y={alto + 12} textAnchor="middle" fontSize="7" fill={P.muted} fontFamily={MONO}>
+          {hhmm(m).slice(0, 2)}
+        </text>
+      ))}
+      {relleno && <polygon points={`${x(muestras[0].m)},${y(0)} ${pts.join(" ")} ${x(muestras[muestras.length - 1].m)},${y(0)}`} fill={color} opacity="0.14" />}
+      <polyline points={pts.join(" ")} fill="none" stroke={color} strokeWidth="1.8" strokeLinejoin="round" strokeLinecap="round" />
+      <text x={IZQ + AN} y={10} textAnchor="end" fontSize="7.5" fill={P.muted} fontFamily={FUENTE} fontWeight="600">
+        {unidad}
+      </text>
+    </svg>
+  );
+}
+
+// barras horizontales para comparar estaciones
+function Ranking({ filas, color, unidad }) {
+  const max = Math.max(1, ...filas.map((f) => f.v));
+  return (
+    <div>
+      {filas.map((f) => (
+        <div key={f.n} style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 5 }}>
+          <span style={{ fontSize: T.aux, width: 96, flexShrink: 0, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{f.n}</span>
+          <span style={{ flex: 1, height: 8, background: P.sunken, borderRadius: R.hilo, overflow: "hidden" }}>
+            <span style={{ display: "block", width: `${(f.v / max) * 100}%`, height: "100%", background: color, borderRadius: R.hilo }} />
+          </span>
+          <span style={{ fontSize: T.aux, fontFamily: MONO, color: P.muted, width: 46, textAlign: "right", flexShrink: 0 }}>
+            {f.v >= 1000 ? `${(f.v / 1000).toFixed(1)}k` : Math.round(f.v)}
+          </span>
+        </div>
+      ))}
+      <div style={{ fontSize: T.micro, color: P.muted, marginTop: 2 }}>{unidad}</div>
+    </div>
+  );
+}
+
+/* Malla de toda la línea: las trece circulaciones superpuestas. Donde dos
+   trazos de sentido contrario se cruzan hay un cruce, y en los tramos de vía
+   única eso es lo que hay que vigilar.                                   */
+function MallaLinea({ g }) {
+  // circulación resaltada: el resto queda en gris para poder seguirla
+  const [sel, setSel] = useState(null);
+  const AL = 230;
+  const AN = 300;
+  const IZQ = 20;
+  const ARR = 10;
+  const tope = ESTACIONES[N - 1].t || 1;
+  const x = (m) => IZQ + ((m - INICIO) / Math.max(1, FIN - INICIO)) * AN;
+  const y = (idx) => {
+    const k = Math.max(0, Math.min(N - 1, idx));
+    const ent = Math.floor(k);
+    const a2 = ESTACIONES[ent].t;
+    const b2 = ESTACIONES[Math.min(N - 1, ent + 1)].t;
+    return ARR + ((a2 + (b2 - a2) * (k - ent)) / tope) * AL;
+  };
+  const horas = [];
+  for (let m = Math.ceil(INICIO / 60) * 60; m <= FIN; m += 60) horas.push(m);
+
+  // los tramos de vía única se sombrean: ahí los cruces son críticos
+  const tramos = (g.restricciones || []).filter((r) => r.tramo);
+
+  return (
+    <div>
+      <svg viewBox={`0 0 ${IZQ + AN + 4} ${AL + ARR + 16}`} style={{ width: "100%", display: "block" }}>
+        {tramos.map((r, k) => (
+          <rect key={`vu${k}`} x={IZQ} y={y(r.tramo.a)} width={AN} height={Math.max(1, y(r.tramo.b) - y(r.tramo.a))} fill={P.warn} opacity="0.1" />
+        ))}
+        {ESTACIONES.map((e, i) => (
+          <line key={e.n} x1={IZQ} y1={y(i)} x2={IZQ + AN} y2={y(i)} stroke={SIGLA[e.n] ? P.rule : P.sunken} strokeWidth={e.cab || e.term ? 1 : SIGLA[e.n] ? 0.7 : 0.4} />
+        ))}
+        {ESTACIONES.map((e, i) =>
+          SIGLA[e.n] ? (
+            <text key={`s${e.n}`} x={IZQ - 3} y={y(i) + 3} textAnchor="end" fontSize="7.5" fill={P.muted} fontFamily={MONO} fontWeight="700">
+              {SIGLA[e.n] || e.corto}
+            </text>
+          ) : null
+        )}
+        {horas.map((m) => (
+          <g key={m}>
+            <line x1={x(m)} y1={ARR} x2={x(m)} y2={ARR + AL} stroke={P.sunken} strokeWidth="0.5" />
+            <text x={x(m)} y={AL + ARR + 12} textAnchor="middle" fontSize="7" fill={P.muted} fontFamily={MONO}>
+              {hhmm(m).slice(0, 2)}
+            </text>
+          </g>
+        ))}
+        {[...g.trenes].sort((a2, b2) => (a2.i === sel ? 1 : 0) - (b2.i === sel ? 1 : 0)).map((t) => {
+          const tramosT = [];
+          let actual = [];
+          (t.traza || []).forEach((pos, k) => {
+            if (pos === null || pos === undefined) {
+              if (actual.length > 1) tramosT.push(actual);
+              actual = [];
+              return;
+            }
+            actual.push(`${x(INICIO + k * PASO_TRAZA).toFixed(1)} ${y(pos / 10).toFixed(1)}`);
+          });
+          if (actual.length > 1) tramosT.push(actual);
+          const marcada = sel === null || sel === t.i;
+          return tramosT.map((pts, k) => (
+            <polyline
+              key={`${t.i}-${k}`}
+              points={pts.join(" ")}
+              fill="none"
+              stroke={!marcada ? P.rule : t.esVacio ? P.solido : COLOR.rojo}
+              strokeWidth={sel === t.i ? 2.2 : 1.1}
+              opacity={!marcada ? 0.5 : t.esVacio ? 0.5 : 0.8}
+              strokeLinejoin="round"
+            />
+          ));
+        })}
+        <line x1={x(Math.min(FIN, g.reloj))} y1={ARR} x2={x(Math.min(FIN, g.reloj))} y2={ARR + AL} stroke={P.ink} strokeWidth="0.8" opacity="0.35" />
+      </svg>
+      <div style={{ fontSize: T.micro, color: P.muted, margin: "4px 0 10px" }}>
+        Cada trazo es una circulación. Donde se cruzan dos de sentido contrario hay un cruce; el sombreado marca los tramos en vía única.
+      </div>
+
+      {/* Relación de circulaciones: al elegir una, el resto se apaga. Con trece
+          trazos superpuestos es la única forma de seguir uno concreto.  */}
+      <div style={{ display: "flex", flexWrap: "wrap", gap: 4 }}>
+        <button
+          onClick={() => setSel(null)}
+          style={{
+            background: sel === null ? P.solido : P.surface,
+            color: sel === null ? P.blanco : P.muted,
+            border: `1px solid ${sel === null ? P.solido : P.rule}`,
+            borderRadius: R.normal,
+            padding: "5px 9px",
+            fontFamily: "inherit",
+            fontSize: T.micro,
+            fontWeight: 700,
+            cursor: "pointer",
+          }}
+        >
+          Todas
+        </button>
+        {g.trenes.map((t) => {
+          const on = sel === t.i;
+          const supr = t.estado === "suprimido";
+          return (
+            <button
+              key={t.i}
+              onClick={() => setSel(on ? null : t.i)}
+              title={`Circulación ${t.i}${supr ? " · fuera de servicio" : ""}`}
+              style={{
+                background: on ? COLOR.rojo : P.surface,
+                color: on ? P.blanco : supr ? P.muted : P.ink,
+                border: `1px solid ${on ? COLOR.rojo : P.rule}`,
+                borderRadius: R.normal,
+                padding: "5px 7px",
+                fontFamily: MONO,
+                fontSize: T.micro,
+                fontWeight: 700,
+                cursor: "pointer",
+                opacity: supr ? 0.55 : 1,
+              }}
+            >
+              {numeroTren(t, g.reloj)}
+            </button>
+          );
+        })}
+      </div>
+
+      {sel !== null &&
+        (() => {
+          const t = g.trenes.find((x) => x.i === sel);
+          if (!t) return null;
+          const m = marchaEnCurso(t);
+          return (
+            <div style={{ fontSize: T.aux, color: P.muted, marginTop: 8, lineHeight: 1.5 }}>
+              Circulación {t.i} · {t.unidades.map((u) => u.id).join(" + ") || "sin material"}
+              {m ? ` · ahora ${m.desde} → ${m.hasta}` : t.estado === "suprimido" ? " · fuera de servicio" : ""}
+              {t.retraso > 0.5 ? ` · ${retTxt(retrasoEfectivo(t))}` : ""}
+            </div>
+          );
+        })()}
+    </div>
+  );
+}
+
+/* Histórico de campaña: cada turno cerrado deja su ficha, y aquí se comparan.
+   Es lo que permite ver patrones que dentro de un turno no se aprecian, como
+   que las tardes van peor porque heredan los retrasos de la mañana.     */
+function Historico({ camp }) {
+  const h = (camp && camp.historico) || [];
+  const [campo, setCampo] = useState("punt");
+  if (!h.length)
+    return <Vacio icono="~" txt="Todavía no hay turnos cerrados" pista="Al cerrar el primer turno empezarás a ver la evolución de la campaña." />;
+
+  const CAMPOS = [
+    { k: "punt", l: "Puntualidad", u: "%", col: (v) => colPuntualidad(v) },
+    { k: "ret", l: "Retraso", u: "′", col: (v) => colRetrasoMedio(v) },
+    { k: "viajeros", l: "Viajeros", u: "", col: () => P.ink },
+    { k: "puntos", l: "Puntos", u: "", col: () => P.ink },
+  ];
+  const sel = CAMPOS.find((c) => c.k === campo);
+  const vals = h.map((x) => x[campo] || 0);
+  const max = Math.max(1, ...vals);
+  const min = Math.min(...vals);
+  const media = vals.reduce((a2, b2) => a2 + b2, 0) / vals.length;
+
+  // media por tipo de turno: es donde aparecen los patrones
+  const porTurno = ORDEN_TURNOS.map((t) => {
+    const suyos = h.filter((x) => x.turno === t);
+    return { t, n: suyos.length, v: suyos.length ? suyos.reduce((a2, b2) => a2 + (b2[campo] || 0), 0) / suyos.length : null };
+  }).filter((x) => x.n);
+
+  return (
+    <div>
+      <div style={{ display: "flex", gap: 4, marginBottom: 12, flexWrap: "wrap" }}>
+        {CAMPOS.map((c) => (
+          <button
+            key={c.k}
+            onClick={() => setCampo(c.k)}
+            style={{
+              flex: 1,
+              minWidth: 0,
+              background: campo === c.k ? P.solido : P.surface,
+              color: campo === c.k ? P.blanco : P.ink,
+              border: `1px solid ${campo === c.k ? P.solido : P.rule}`,
+              borderRadius: R.normal,
+              padding: "6px 4px",
+              fontFamily: "inherit",
+              fontSize: T.micro,
+              fontWeight: 700,
+              cursor: "pointer",
+            }}
+          >
+            {c.l}
+          </button>
+        ))}
+      </div>
+
+      <Bloque titulo={`${sel.l} turno a turno`}>
+        {/* una barra por turno, con la media de la campaña marcada */}
+        <div style={{ display: "flex", alignItems: "flex-end", gap: 2, height: 110, marginBottom: 6, position: "relative" }}>
+          <div style={{ position: "absolute", left: 0, right: 0, bottom: `${(media / max) * 100}%`, borderTop: `1px dashed ${P.muted}`, opacity: 0.6 }} />
+          {h.slice(-24).map((x, k) => (
+            <div
+              key={k}
+              title={`Día ${x.dia} ${x.turnoN} · ${x[campo]}${sel.u}`}
+              style={{
+                flex: 1,
+                minWidth: 3,
+                height: `${Math.max(2, ((x[campo] || 0) / max) * 100)}%`,
+                background: sel.col(x[campo]),
+                borderRadius: `${R.hilo}px ${R.hilo}px 0 0`,
+                opacity: 0.85,
+              }}
+            />
+          ))}
+        </div>
+        <div style={{ display: "flex", justifyContent: "space-between", fontSize: T.micro, color: P.muted, fontFamily: MONO }}>
+          <span>peor {min}{sel.u}</span>
+          <span>media {media.toFixed(1)}{sel.u}</span>
+          <span>mejor {max}{sel.u}</span>
+        </div>
+      </Bloque>
+
+      <Bloque titulo="Media por tipo de turno">
+        <Ranking filas={porTurno.map((x) => ({ n: (TURNOS.find((z) => z.id === x.t) || {}).n || x.t, v: Math.round(x.v * 10) / 10 }))} color={COLOR.rojo} unidad={`${sel.l.toLowerCase()} media de cada turno`} />
+      </Bloque>
+
+      <Bloque titulo="Últimos turnos">
+        {[...h].reverse().slice(0, 10).map((x, k) => (
+          <div key={k} style={{ display: "flex", alignItems: "center", gap: 8, padding: "6px 0", borderBottom: k < 9 ? `1px solid ${P.sunken}` : "none" }}>
+            <span style={{ fontSize: T.aux, fontWeight: 600, width: 92, flexShrink: 0 }}>
+              Día {x.dia} · {x.turnoN}
+            </span>
+            <span style={{ fontSize: T.aux, fontFamily: MONO, color: colPuntualidad(x.punt), width: 46, textAlign: "right" }}>{x.punt}%</span>
+            <span style={{ fontSize: T.aux, fontFamily: MONO, color: P.muted, flex: 1, textAlign: "right" }}>{nf(x.viajeros)} viajeros</span>
+            <span style={{ fontSize: T.aux, fontFamily: MONO, fontWeight: 700, width: 46, textAlign: "right" }}>{nf(x.puntos)}</span>
+          </div>
+        ))}
+      </Bloque>
+    </div>
+  );
+}
+
+/* Pantalla de análisis. Reúne lo que el turno va dejando registrado para
+   entender por qué la línea se comporta como lo hace: cuándo aprieta la
+   demanda, dónde se acumula la gente y cómo se propagan los retrasos.   */
+/* Pantalla de calidad del servicio: la nota por línea y el muro con lo que
+   publican los viajeros. Los mensajes los genera el motor; aquí solo se
+   pintan, en orden inverso como en cualquier red social.               */
+function Calidad({ g, camp }) {
+  const [pestana, setPestana] = useState("nota");
+  const lineas = Object.keys(g.porLinea || {});
+  const [lineaVer, setLineaVer] = useState(lineas[0] || g.linea);
+  const [filtro, setFiltro] = useState("todas");
+  const todos = [...(g.reacciones || [])].reverse();
+  const mensajes = filtro === "todas" ? todos : todos.filter((x) => x.linea === filtro);
+  const general = notaGeneral(g);
+  const det = notaCalidad(((g.porLinea || {})[lineaVer] || {}).cal);
+  const colorNota = (n) => (n >= 80 ? P.ok : n >= 60 ? P.warn : P.alert);
+
+  const Pestana = ({ id, txt }) => (
+    <button
+      onClick={() => setPestana(id)}
+      style={{
+        flex: 1,
+        background: pestana === id ? P.ink : P.surface,
+        color: pestana === id ? P.ground : P.ink,
+        border: `1px solid ${pestana === id ? P.ink : P.rule}`,
+        borderRadius: R.normal,
+        padding: "8px 0",
+        fontFamily: "inherit",
+        fontSize: T.base,
+        fontWeight: 700,
+        cursor: "pointer",
+      }}
+    >
+      {txt}
+    </button>
+  );
+
+  return (
+    <div>
+      <div style={{ display: "flex", gap: 6, marginBottom: 12 }}>
+        <Pestana id="nota" txt="Nota" />
+        <Pestana id="muro" txt={`Reacciones${mensajes.length ? ` · ${mensajes.length}` : ""}`} />
+      </div>
+
+      {pestana === "nota" && (
+        <div>
+          {/* nota general, en grande */}
+          <div style={{ ...ST.card, padding: "18px 12px", marginBottom: 10, textAlign: "center" }}>
+            <div style={ST.eyebrow}>Nota general del turno</div>
+            <div style={{ fontSize: 54, fontWeight: 800, letterSpacing: -2, lineHeight: 1, margin: "6px 0 2px", color: colorNota(general) }}>{general}</div>
+            <div style={{ fontSize: T.aux, color: P.muted }}>sobre 100 · media de las líneas ponderada por viajeros</div>
+          </div>
+
+          {/* selector de línea, solo si hay más de una */}
+          {lineas.length > 1 && (
+            <div style={{ display: "flex", gap: 6, marginBottom: 10 }}>
+              {lineas.map((id) => (
+                <button
+                  key={id}
+                  onClick={() => setLineaVer(id)}
+                  style={{
+                    flex: 1,
+                    background: id === lineaVer ? LIN[id] : P.surface,
+                    color: id === lineaVer ? P.blanco : P.ink,
+                    border: `2px solid ${id === lineaVer ? LIN[id] : P.rule}`,
+                    borderRadius: R.normal,
+                    padding: "7px 0",
+                    fontFamily: "inherit",
+                    fontSize: T.base,
+                    fontWeight: 700,
+                    cursor: "pointer",
+                  }}
+                >
+                  {id}
+                  <span style={{ display: "block", fontSize: T.micro, fontWeight: 600, fontFamily: MONO, opacity: id === lineaVer ? 0.85 : 0.6 }}>
+                    {notaCalidad((g.porLinea[id] || {}).cal).nota}
+                  </span>
+                </button>
+              ))}
+            </div>
+          )}
+
+          {/* desglose: de dónde sale el castigo */}
+          <Bloque titulo={`De dónde sale la nota · ${lineaVer}`}>
+            {[
+              ["Retraso sufrido", det.retraso, "minutos de demora ponderados por la gente que los padece"],
+              ["Aglomeración", det.agobio, "ir de pie apretado o quedarse en el andén"],
+              ["Material degradado", det.material, "sin climatización, con marcha limitada o puertas aisladas"],
+              ["Servicio roto", det.roto, "supresiones y transbordos forzosos"],
+            ].map(([nom, val, ayuda], k) => (
+              <div key={nom} style={{ background: fondoFila(k), padding: "8px 10px", margin: "0 -12px", borderRadius: R.normal }}>
+                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", gap: 8 }}>
+                  <span style={{ fontSize: T.base, fontWeight: 600 }}>{nom}</span>
+                  <span style={{ fontSize: T.titulo, fontWeight: 700, fontFamily: MONO, color: val > 0 ? P.alert : P.muted }}>{val > 0 ? `−${val}` : "0"}</span>
+                </div>
+                <div style={{ fontSize: T.aux, color: P.muted, marginTop: 2, lineHeight: 1.4 }}>{ayuda}</div>
+                <div style={{ height: 4, background: P.sunken, borderRadius: 2, overflow: "hidden", marginTop: 6 }}>
+                  <div style={{ width: `${Math.min(100, val * 2.5)}%`, height: "100%", background: val > 0 ? P.alert : P.sunken }} />
+                </div>
+              </div>
+            ))}
+          </Bloque>
+
+          {/* Histórico: cómo ha ido la calidad en los turnos anteriores. Es lo
+              que permite ver si el servicio mejora o empeora.          */}
+          {camp && (camp.historico || []).length > 0 && (
+            <Bloque titulo="Turnos anteriores">
+              {[...camp.historico].reverse().slice(0, 12).map((h, k) => {
+                const suya = (h.calLineas || {})[lineaVer];
+                const val = suya ? suya.nota : h.calidad;
+                return (
+                  <div key={k} style={{ background: fondoFila(k), padding: "8px 10px", margin: "0 -12px", borderRadius: R.normal }}>
+                    <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", gap: 8 }}>
+                      <span style={{ fontSize: T.base, fontWeight: 600 }}>
+                        Día {h.dia} · {h.turnoN}
+                      </span>
+                      <span style={{ display: "flex", alignItems: "baseline", gap: 10, fontFamily: MONO }}>
+                        <span style={{ fontSize: T.aux, color: P.muted }}>{Math.round(h.punt)} % punt</span>
+                        <span style={{ fontSize: T.titulo, fontWeight: 700, color: colorNota(val) }}>{val}</span>
+                      </span>
+                    </div>
+                    {/* barra de la nota, para ver la tendencia de un vistazo */}
+                    <div style={{ height: 4, background: P.sunken, borderRadius: 2, overflow: "hidden", marginTop: 6 }}>
+                      <div style={{ width: `${val}%`, height: "100%", background: colorNota(val) }} />
+                    </div>
+                  </div>
+                );
+              })}
+              <div style={{ borderTop: `1px solid ${P.sunken}`, paddingTop: 8, marginTop: 4, fontSize: T.aux, color: P.muted, lineHeight: 1.4 }}>
+                La nota mostrada es la de {lineaVer}. La puntualidad es del turno completo.
+              </div>
+            </Bloque>
+          )}
+        </div>
+      )}
+
+      {pestana === "muro" && (
+        <div>
+          {/* filtro por línea: con varias en juego el muro las mezcla y conviene
+              poder ver solo lo que afecta a una.                        */}
+          {lineas.length > 1 && (
+            <div style={{ display: "flex", gap: 6, marginBottom: 10 }}>
+              {["todas", ...lineas].map((id) => (
+                <button
+                  key={id}
+                  onClick={() => setFiltro(id)}
+                  style={{
+                    flex: 1,
+                    background: filtro === id ? (id === "todas" ? P.ink : LIN[id]) : P.surface,
+                    color: filtro === id ? P.blanco : P.ink,
+                    border: `1px solid ${filtro === id ? (id === "todas" ? P.ink : LIN[id]) : P.rule}`,
+                    borderRadius: R.normal,
+                    padding: "6px 0",
+                    fontFamily: "inherit",
+                    fontSize: T.aux,
+                    fontWeight: 700,
+                    cursor: "pointer",
+                  }}
+                >
+                  {id === "todas" ? "Todas" : id}
+                </button>
+              ))}
+            </div>
+          )}
+          {!mensajes.length && (
+            <div style={{ ...ST.card, padding: 12, fontSize: T.base, color: P.muted, lineHeight: 1.5 }}>
+              Todavía no hay publicaciones. Aparecerán solas en cuanto el servicio dé motivos.
+            </div>
+          )}
+          {mensajes.map((m) => (
+            <div key={m.id} style={{ ...ST.card, padding: 12, marginBottom: 8, display: "flex", gap: 10, alignItems: "flex-start" }}>
+              {/* avatar con iniciales sobre color estable */}
+              <div
+                style={{
+                  width: 38,
+                  height: 38,
+                  borderRadius: 19,
+                  background: m.color,
+                  color: P.blanco,
+                  flexShrink: 0,
+                  display: "flex",
+                  alignItems: "center",
+                  justifyContent: "center",
+                  fontSize: T.base,
+                  fontWeight: 700,
+                  letterSpacing: -0.3,
+                }}
+              >
+                {m.iniciales}
+              </div>
+              <div style={{ flex: 1, minWidth: 0 }}>
+                <div style={{ display: "flex", alignItems: "baseline", gap: 5, flexWrap: "wrap" }}>
+                  <span style={{ fontSize: T.base, fontWeight: 700 }}>{m.nombre}</span>
+                  <span style={{ fontSize: T.aux, color: P.muted }}>@{m.alias}</span>
+                  <span style={{ fontSize: T.aux, color: P.muted }}>· {hhmm(m.min)}</span>
+                  {lineas.length > 1 && m.linea && (
+                    <span style={{ background: LIN[m.linea], color: P.blanco, borderRadius: R.menudo, padding: "0 4px", fontSize: T.micro, fontWeight: 800 }}>{m.linea}</span>
+                  )}
+                </div>
+                <div style={{ fontSize: T.base, color: P.ink, lineHeight: 1.45, marginTop: 3, whiteSpace: "pre-line" }}>{m.texto}</div>
+                <div style={{ display: "flex", gap: 16, marginTop: 7, fontSize: T.aux, color: P.muted, fontFamily: MONO }}>
+                  <span>♡ {m.likes}</span>
+                  <span>↻ {m.rt}</span>
+                </div>
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function Analisis({ g, camp }) {
+  const [seccion, setSeccion] = useState("demanda");
+  const est = g.estad || { muestras: [], suben: [], bajan: [], esperaMax: [] };
+  const ms = est.muestras || [];
+  const b = balanceTurno(g);
+
+  // la hora punta se deduce de los datos, no se supone
+  const pico = ms.reduce((mejor, x) => (!mejor || x.bordo > mejor.bordo ? x : mejor), null);
+  const picoAnden = ms.reduce((mejor, x) => (!mejor || x.anden > mejor.anden ? x : mejor), null);
+
+  const movimiento = ESTACIONES.map((e, i) => ({ n: e.corto, v: (est.suben[i] || 0) + (est.bajan[i] || 0) }))
+    .filter((f) => f.v > 0)
+    .sort((a2, b2) => b2.v - a2.v)
+    .slice(0, 10);
+  const colas = ESTACIONES.map((e, i) => ({ n: e.corto, v: est.esperaMax[i] || 0 }))
+    .filter((f) => f.v > 0)
+    .sort((a2, b2) => b2.v - a2.v)
+    .slice(0, 10);
+
+  const SECCIONES = [
+    { k: "demanda", l: "Demanda" },
+    { k: "servicio", l: "Servicio" },
+    { k: "estaciones", l: "Estaciones" },
+    { k: "malla", l: "Malla" },
+    { k: "campana", l: "Campaña" },
+  ];
+
+  return (
+    <div>
+      <div style={{ display: "flex", gap: 6, marginBottom: 12 }}>
+        {SECCIONES.map((x) => (
+          <button
+            key={x.k}
+            onClick={() => setSeccion(x.k)}
+            style={{
+              flex: 1,
+              minWidth: 0,
+              background: seccion === x.k ? P.solido : P.surface,
+              color: seccion === x.k ? P.blanco : P.ink,
+              border: `1px solid ${seccion === x.k ? P.solido : P.rule}`,
+              borderRadius: R.normal,
+              padding: "7px 4px",
+              fontFamily: "inherit",
+              fontSize: T.aux,
+              fontWeight: 600,
+              cursor: "pointer",
+              whiteSpace: "nowrap",
+              overflow: "hidden",
+              textOverflow: "ellipsis",
+            }}
+          >
+            {x.l}
+          </button>
+        ))}
+      </div>
+
+      {seccion === "demanda" && (
+        <>
+          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8, marginBottom: 12 }}>
+            <Kpi k="Transportados" v={nf(b.transportados)} c={P.ink} />
+            <Kpi k="Ocupación media" v={`${b.ocupMedia.toFixed(0)}%`} c={colOcupacion(b.ocupMedia)} />
+          </div>
+          <Bloque titulo="Viajeros a bordo a lo largo del turno">
+            <Serie muestras={ms} campo="bordo" color={COLOR.rojo} unidad="viajeros a bordo" />
+            {pico && (
+              <div style={{ fontSize: T.aux, color: P.muted, marginTop: 6, lineHeight: 1.5 }}>
+                La punta se alcanza a las <strong style={{ color: P.ink }}>{hhmm(pico.m)}</strong>, con {nf(pico.bordo)} viajeros a bordo y una ocupación media del {pico.ocup.toFixed(0)} %.
+              </div>
+            )}
+          </Bloque>
+          <Bloque titulo="Gente esperando en los andenes">
+            <Serie muestras={ms} campo="anden" color={P.warn} unidad="viajeros en andén" />
+            {picoAnden && (
+              <div style={{ fontSize: T.aux, color: P.muted, marginTop: 6, lineHeight: 1.5 }}>
+                El peor momento en andén fueron las <strong style={{ color: P.ink }}>{hhmm(picoAnden.m)}</strong>, con {nf(picoAnden.anden)} personas esperando.
+              </div>
+            )}
+          </Bloque>
+          <Bloque titulo="Ocupación media de los trenes">
+            <Serie muestras={ms} campo="ocup" color={P.ok} unidad="por ciento de plazas" />
+          </Bloque>
+        </>
+      )}
+
+      {seccion === "servicio" && (
+        <>
+          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8, marginBottom: 12 }}>
+            <Kpi k="Puntualidad" v={`${b.punt.toFixed(1)}%`} c={colPuntualidad(b.punt)} />
+            <Kpi k="Retraso medio" v={`${b.retrasoMedio.toFixed(1)}′`} c={colRetrasoMedio(b.retrasoMedio)} />
+          </div>
+          <Bloque titulo="Retraso medio de la línea">
+            <Serie muestras={ms} campo="ret" color={P.alert} unidad="minutos de retraso" />
+            {b.picoRetraso > 1 && (
+              <div style={{ fontSize: T.aux, color: P.muted, marginTop: 6, lineHeight: 1.5 }}>
+                El peor momento fueron las <strong style={{ color: P.ink }}>{hhmm(b.horaPico)}</strong>, con {b.picoRetraso.toFixed(0)} min de media.
+                {b.minutosApuro > 0 && ` Hubo trenes detenidos o retenidos durante ${b.minutosApuro} min.`}
+              </div>
+            )}
+          </Bloque>
+          <Bloque titulo="Puntualidad acumulada">
+            <Serie muestras={ms} campo="punt" color={P.ok} unidad="por ciento" relleno={false} />
+          </Bloque>
+          <Bloque titulo="Circulaciones en servicio">
+            <Serie muestras={ms} campo="circ" color={P.ink} unidad={`de ${CIRCULACIONES}`} relleno={false} alto={70} />
+          </Bloque>
+        </>
+      )}
+
+      {seccion === "estaciones" && (
+        <>
+          <Bloque titulo="Estaciones con más movimiento">
+            {movimiento.length ? <Ranking filas={movimiento} color={COLOR.rojo} unidad="subidas más bajadas en el turno" /> : <Vacio icono="~" txt="Aún no hay movimiento" />}
+          </Bloque>
+          <Bloque titulo="Mayor acumulación en andén">
+            {colas.length ? <Ranking filas={colas} color={P.warn} unidad="máximo de personas esperando a la vez" /> : <Vacio icono="~" txt="Sin acumulaciones" />}
+          </Bloque>
+          <Bloque titulo="Reparto por estación">
+            <div style={{ fontSize: T.aux, color: P.muted, lineHeight: 1.5 }}>
+              Las cifras salen del movimiento real del turno, no del reparto teórico: una avería o una supresión cambian dónde se acumula la gente.
+            </div>
+          </Bloque>
+        </>
+      )}
+
+      {seccion === "malla" && (
+        <Bloque titulo="Malla de circulación">
+          <MallaLinea g={g} />
+        </Bloque>
+      )}
+
+      {seccion === "campana" && <Historico camp={camp} />}
+    </div>
+  );
+}
+
+/* Panel de pruebas: elegir familia, avería, grado y circulación, y lanzarlo.
+   Solo aparece con el modo de pruebas activo.                           */
+function PanelPruebas({ g, lanzar }) {
+  const [fam, setFam] = useState("averia");
+  const [av, setAv] = useState("traccion");
+  const [gr, setGr] = useState("leve");
+  const [tren, setTren] = useState(g.trenes.find((t) => t.estado !== "suprimido" && t.unidades.length)?.i ?? 1);
+
+  const tipo = AVERIAS_MATERIAL.find((x) => x.id === av);
+  const grados = (tipo && tipo.grados) || ["leve", "habitual", "grave", "muygrave"];
+  const NOMBRE_GR = { leve: "Leve", habitual: "Habitual", grave: "Grave", muygrave: "Muy grave" };
+  const sel = { width: "100%", background: P.surface, color: P.ink, border: `1px solid ${P.rule}`, borderRadius: R.normal, padding: 9, fontFamily: "inherit", fontSize: T.base, marginBottom: 8 };
+
+  return (
+    <div style={{ marginBottom: 20 }}>
+      <select value={fam} onChange={(e) => setFam(e.target.value)} style={sel}>
+        <option value="averia">Avería de material</option>
+        {TABLA.filter((f) => f.id !== "averia").map((f) => {
+          const d = POOL.find((x) => x.id === f.id);
+          return (
+            <option key={f.id} value={f.id}>
+              {NOMBRE_FAMILIA[f.id] || f.id}
+            </option>
+          );
+        })}
+      </select>
+
+      {fam === "averia" && (
+        <>
+          <select value={av} onChange={(e) => setAv(e.target.value)} style={sel}>
+            {AVERIAS_MATERIAL.map((x) => (
+              <option key={x.id} value={x.id}>
+                {x.nombre}
+              </option>
+            ))}
+          </select>
+          <select value={gr} onChange={(e) => setGr(e.target.value)} style={sel}>
+            {grados.map((x) => (
+              <option key={x} value={x}>
+                {NOMBRE_GR[x]}
+              </option>
+            ))}
+          </select>
+          <select value={tren} onChange={(e) => setTren(Number(e.target.value))} style={sel}>
+            {g.trenes
+              .filter((t) => t.estado !== "suprimido" && t.unidades.length)
+              .map((t) => (
+                <option key={t.i} value={t.i}>
+                  Circulación {t.i} · {numeroTren(t, g.reloj)} · {t.unidades.map((u) => u.id).join(" + ")}
+                </option>
+              ))}
+          </select>
+        </>
+      )}
+
+      <button
+        onClick={() => lanzar(fam, av, gr, tren)}
+        style={{ width: "100%", background: P.info, color: P.blanco, border: "none", borderRadius: R.normal, padding: 12, fontFamily: "inherit", fontWeight: 700, fontSize: T.base, cursor: "pointer" }}
+      >
+        Lanzar incidencia
+      </button>
     </div>
   );
 }
