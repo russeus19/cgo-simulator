@@ -8663,10 +8663,13 @@ function Asignacion({ asig, setAsig, slotSel, setSlotSel, empezar, camp }) {
         </div>
       </div>
 
-      {/* Una pestaña por línea, con las circulaciones que le faltan por cubrir.
-          El material apartado, en cambio, es común a todas.             */}
-      {LINEAS_EN_JUEGO.length > 1 && (
-        <div style={{ display: "flex", gap: 6, marginBottom: 12 }}>
+      {/* Una pestaña por línea, con las circulaciones que le faltan por cubrir,
+          y una más para el material apartado, que es común a todas.
+
+          Se dibujan siempre: con una sola línea la suya sobra, pero la del
+          apartadero no, y al ocultarlas todas no había forma de llegar a ella
+          ni de dejar material estacionado.                              */}
+      <div style={{ display: "flex", gap: 6, marginBottom: 12 }}>
           {[...LINEAS_EN_JUEGO, "__apart"].map((id) => {
             const sel = id === lineaSel;
             if (id === "__apart") {
@@ -8727,8 +8730,7 @@ function Asignacion({ asig, setAsig, slotSel, setSlotSel, empezar, camp }) {
               </button>
             );
           })}
-        </div>
-      )}
+      </div>
 
       {/* El texto describe la línea que se está asignando: cada una admite su
           material y tiene su propia demanda.                            */}
@@ -10720,10 +10722,14 @@ function BarraMando({ g, setG, tab, setTab, setAjustes, setAnalisis, setCalidad,
         {/* La fila de mando pesa más que la de navegación: pausa y velocidad
             se tocan constantemente durante la partida, y las pestañas solo al
             cambiar de pantalla.                                          */}
-        {/* Los tres controles siguen centrados en la barra y los ajustes van
-            al extremo derecho. Para que el centrado no se rompa, se reserva a
-            la izquierda el mismo hueco que ocupan los ajustes.          */}
-        <div style={{ display: "flex", alignItems: "center", gap: 8, padding: "0 12px 8px" }}>
+        {/* Los tres controles van centrados en la barra. A cada lado hay el
+            mismo ancho: a la izquierda análisis y reacciones, a la derecha
+            ajustes y un hueco vacío del mismo tamaño.                   */}
+        {/* Tres regiones: izquierda y derecha crecen por igual, así que el
+            bloque central queda exactamente en el centro de la barra pase lo
+            que pase. Los botones de los extremos se pegan a su borde.    */}
+        <div style={{ display: "flex", alignItems: "center", padding: "0 12px 8px" }}>
+          <div style={{ flex: 1, display: "flex", alignItems: "center", justifyContent: "flex-start", gap: 8 }}>
           <button
             onClick={() => setAnalisis(true)}
             title="Análisis"
@@ -10817,7 +10823,11 @@ function BarraMando({ g, setG, tab, setTab, setAjustes, setAnalisis, setCalidad,
               </span>
             )}
           </button>
-          <div style={{ flex: 1, display: "flex", alignItems: "center", justifyContent: "center", gap: 8 }}>
+          </div>
+
+          {/* Los tres controles de marcha van más juntos entre sí que respecto
+              al resto: se manejan como una unidad.                       */}
+          <div style={{ flexShrink: 0, display: "flex", alignItems: "center", justifyContent: "center", gap: 5, margin: "0 14px" }}>
           {/* Selector de línea. Solo la C-7 está implementada; el resto del
               núcleo aparece atenuado, igual que en la portada, para que se vea
               hacia dónde va el juego.                                    */}
@@ -10931,6 +10941,7 @@ function BarraMando({ g, setG, tab, setTab, setAjustes, setAnalisis, setCalidad,
           </div>
           </div>
 
+          <div style={{ flex: 1, display: "flex", alignItems: "center", justifyContent: "flex-end", gap: 8 }}>
           <button
             onClick={() => setAjustes(true)}
             title="Ajustes"
@@ -10954,6 +10965,7 @@ function BarraMando({ g, setG, tab, setTab, setAjustes, setAnalisis, setCalidad,
           >
             ⋯
           </button>
+          </div>
         </div>
 
         {/* mismo margen lateral que la fila de mando: con 22 aquí y 12 arriba,
